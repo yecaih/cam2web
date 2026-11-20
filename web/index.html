@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cam2web · 相机调试台</title>
+  <link rel="stylesheet" href="/assets/cam2web.css">
+</head>
+<body>
+  <main>
+    <header class="toolbar panel" aria-label="设备与预览">
+      <h1>相机调试台</h1>
+      <div class="device row">
+        <select id="camera" aria-label="采集节点" disabled><option value="">选择采集节点</option></select>
+        <button type="button" id="preview-toggle" data-action="start" disabled>启动预览</button>
+      </div>
+      <div class="statuses row" role="status">
+        <span id="board" class="badge">板端：连接中</span>
+        <span id="viewer" class="badge">本页：未订阅</span>
+      </div>
+      <p id="operation" class="error" role="alert"></p>
+    </header>
+
+    <div class="workbench">
+      <section class="preview panel" aria-labelledby="preview-title">
+        <header class="row between panel-heading">
+          <h2 id="preview-title">图像预览</h2>
+          <span id="preview-metrics" class="small"></span>
+        </header>
+        <div class="viewport">
+          <img id="frame" alt="实时相机预览" hidden>
+          <p id="empty-frame" role="status">预览未启动</p>
+        </div>
+      </section>
+      <section class="metadata panel row between" aria-labelledby="metadata-title">
+        <h2 id="metadata-title">Metadata</h2>
+        <span class="small">—</span>
+      </section>
+
+      <div class="commands">
+        <details class="command-group panel" open>
+          <summary id="controls-title" class="panel-heading">用户命令</summary>
+          <div id="controls" class="entries" role="region" aria-labelledby="controls-title" tabindex="0">
+            <p class="small" id="controls-note" role="status"></p>
+            <div id="control-rows"></div>
+          </div>
+        </details>
+        <details class="command-group panel">
+          <summary id="camera-controls-title" class="panel-heading">相机命令</summary>
+          <div id="camera-controls" class="entries" role="region" aria-labelledby="camera-controls-title" tabindex="0">
+            <p class="small" id="camera-controls-note" role="status"></p>
+            <div id="camera-control-rows"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </main>
+  <script src="/assets/cam2web.js" defer></script>
+</body>
+</html>

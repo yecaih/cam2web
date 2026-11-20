@@ -1,0 +1,1291 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cam2web 源码导读 · 结构拓扑 / 线程拓扑</title>
+<style>
+  :root {
+    --bg: #f4f2ec;
+    --paper: #fffdf8;
+    --panel: #fbf9f3;
+    --panel-2: #f3efe6;
+    --ink: #1c1f22;
+    --ink-2: #41464d;
+    --muted: #71767e;
+    --line: #ddd7ca;
+    --line-strong: #c8c1b1;
+    --accent: #0d7268;
+    --accent-soft: #dcefec;
+    --amber: #a85a10;
+    --amber-soft: #f6e8d5;
+    --blue: #2b5f96;
+    --blue-soft: #e0e9f4;
+    --rose: #a03a52;
+    --rose-soft: #f6e0e5;
+    --code-bg: #efeae0;
+    --shadow: 0 1px 0 rgba(28, 31, 34, .04), 0 10px 30px rgba(28, 31, 34, .05);
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  html[data-theme="dark"] {
+    --bg: #121417;
+    --paper: #171a1f;
+    --panel: #1c2026;
+    --panel-2: #222731;
+    --ink: #e8e5de;
+    --ink-2: #c3c6cb;
+    --muted: #8f959d;
+    --line: #2b3039;
+    --line-strong: #3a414d;
+    --accent: #52d6c4;
+    --accent-soft: #16302e;
+    --amber: #f0b264;
+    --amber-soft: #342818;
+    --blue: #8ab8ea;
+    --blue-soft: #16283c;
+    --rose: #f08aa1;
+    --rose-soft: #3a1c24;
+    --code-bg: #20252d;
+    --shadow: 0 1px 0 rgba(0, 0, 0, .3), 0 18px 40px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
+      radial-gradient(900px 500px at -10% 10%, color-mix(in srgb, var(--amber) 6%, transparent), transparent 55%),
+      var(--bg);
+    color: var(--ink);
+    font: 15px/1.7 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  code, kbd, .mono { font-family: var(--mono); font-size: .92em; }
+  code {
+    background: var(--code-bg);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    border-radius: 5px;
+    padding: .08em .38em;
+    white-space: nowrap;
+  }
+  h1, h2, h3, h4 { line-height: 1.28; letter-spacing: -.01em; margin: 0; }
+  h2 { font-size: clamp(22px, 2.4vw, 29px); }
+  h3 { font-size: 17px; }
+  h4 { font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  p { margin: .7em 0; }
+  ul, ol { margin: .6em 0; padding-left: 1.35em; }
+  li { margin: .28em 0; }
+  ::selection { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+  /* ── masthead ───────────────────────────────────────────── */
+  .masthead {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 54px 28px 26px;
+    position: relative;
+  }
+  .eyebrow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font: 600 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .masthead h1 {
+    margin: 16px 0 10px;
+    font-size: clamp(30px, 4.6vw, 52px);
+    letter-spacing: -.035em;
+    font-weight: 720;
+  }
+  .masthead h1 .grad {
+    background: linear-gradient(92deg, var(--accent), var(--amber));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .lead { max-width: 760px; font-size: 17px; color: var(--ink-2); }
+  .lead b { color: var(--ink); }
+  .toolbar {
+    position: absolute; top: 26px; right: 28px;
+    display: flex; gap: 8px;
+  }
+  .btn {
+    appearance: none; cursor: pointer;
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink-2);
+    border-radius: 999px; padding: 7px 13px;
+    font: 600 12px/1 var(--sans);
+    transition: .18s ease;
+    box-shadow: var(--shadow);
+  }
+  .btn:hover { border-color: var(--line-strong); color: var(--ink); transform: translateY(-1px); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1px;
+    margin: 30px 0 0;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .fact { background: var(--paper); padding: 14px 16px 13px; }
+  .fact .n { font: 700 24px/1.1 var(--mono); letter-spacing: -.03em; }
+  .fact .k { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .fact:nth-child(1) .n { color: var(--blue); }
+  .fact:nth-child(2) .n { color: var(--amber); }
+  .fact:nth-child(3) .n { color: var(--accent); }
+
+  /* ── shell / toc ────────────────────────────────────────── */
+  .shell {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 18px 28px 90px;
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 44px;
+    align-items: start;
+  }
+  .toc {
+    position: sticky; top: 22px;
+    font-size: 13px;
+    border-left: 1px solid var(--line);
+    padding: 4px 0 4px 16px;
+    max-height: calc(100vh - 44px);
+    overflow: auto;
+  }
+  .toc .caption {
+    font: 700 10px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 12px;
+  }
+  .toc a {
+    display: flex; gap: 9px; align-items: baseline;
+    color: var(--ink-2); padding: 5px 0;
+    border-left: 2px solid transparent;
+    margin-left: -18px; padding-left: 16px;
+    transition: .15s;
+  }
+  .toc a .no { font: 600 10px/1 var(--mono); color: var(--muted); width: 16px; flex: none; }
+  .toc a:hover { color: var(--ink); text-decoration: none; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .toc a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 650; }
+  .toc a.active .no { color: var(--accent); }
+
+  main { min-width: 0; }
+  section { padding-top: 40px; }
+  section:first-child { padding-top: 8px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .sec-no { font: 700 12px/1 var(--mono); color: var(--accent); letter-spacing: .08em; }
+  .sec-sub { color: var(--muted); font-size: 13px; }
+  .rule { height: 1px; background: var(--line); margin: 16px 0 22px; }
+
+  /* ── cards / notices ───────────────────────────────────── */
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 860px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .note {
+    border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent-soft) 55%, var(--paper));
+    padding: 13px 16px; border-radius: 0 10px 10px 0;
+    font-size: 14px; margin: 16px 0;
+  }
+  .note.warn { border-left-color: var(--amber); background: color-mix(in srgb, var(--amber-soft) 60%, var(--paper)); }
+  .note .tag {
+    display: block; font: 700 10px/1 var(--mono); letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 6px;
+  }
+  .note.warn .tag { color: var(--amber); }
+  .kicker { font: 700 10px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+
+  /* ── read path ─────────────────────────────────────────── */
+  .path { counter-reset: step; display: grid; gap: 8px; }
+  .path .step {
+    display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px;
+    padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel);
+  }
+  .path .step::before {
+    counter-increment: step; content: counter(step, decimal-leading-zero);
+    font: 700 12px/1.9 var(--mono); color: var(--accent);
+  }
+  .path .where { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .path .why { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .path code { background: transparent; border: 0; padding: 0; color: var(--ink); font-weight: 600; }
+
+  /* ── layered structure diagram ─────────────────────────── */
+  .layers { display: grid; gap: 9px; }
+  .layer {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr) auto;
+    gap: 16px; align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--tint, var(--line-strong));
+    border-radius: 11px;
+    padding: 12px 15px;
+  }
+  .layer .tier { font: 700 10px/1 var(--mono); color: var(--muted); letter-spacing: .1em; }
+  .layer .name { font-weight: 700; font-size: 14px; margin-top: 4px; }
+  .layer .duty { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: 500 11.5px/1 var(--mono);
+    background: var(--paper); border: 1px solid var(--line);
+    padding: 6px 8px; border-radius: 6px; color: var(--ink-2);
+    white-space: nowrap;
+  }
+  .chip.accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .badge {
+    font: 600 10px/1 var(--mono); letter-spacing: .06em;
+    padding: 5px 7px; border-radius: 5px; white-space: nowrap;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .badge.t0 { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 32%, var(--line)); background: color-mix(in srgb, var(--blue-soft) 55%, var(--paper)); }
+  .badge.t1 { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: color-mix(in srgb, var(--amber-soft) 55%, var(--paper)); }
+  .badge.t2 { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 55%, var(--paper)); }
+  .dep { display: flex; align-items: center; gap: 10px; padding-left: 92px; color: var(--muted); font: 600 10px/1 var(--mono); letter-spacing: .1em; }
+  .dep::before { content: ""; width: 1px; height: 18px; background: var(--line-strong); }
+  .dep span { background: var(--bg); padding: 3px 6px; border-radius: 4px; }
+  @media (max-width: 900px) { .layer { grid-template-columns: 1fr; gap: 8px; } .dep { padding-left: 12px; } }
+
+  /* ── thread lanes ──────────────────────────────────────── */
+  .lanes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr) 150px minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .lane {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--tint, var(--line-strong));
+    border-radius: 12px;
+    padding: 14px 15px;
+    display: flex; flex-direction: column; gap: 10px;
+    box-shadow: var(--shadow);
+    min-width: 0;
+  }
+  .lane h3 { font-size: 14.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lane .who { font: 600 10.5px/1 var(--mono); color: var(--muted); letter-spacing: .04em; }
+  .lane ol, .lane ul { padding-left: 1.15em; margin: 0; font-size: 12.6px; }
+  .lane li { margin: .3em 0; color: var(--ink-2); }
+  .lane li b { color: var(--ink); font-weight: 650; }
+  .owns {
+    margin-top: auto; font-size: 11.5px; color: var(--muted);
+    border-top: 1px dashed var(--line); padding-top: 8px;
+  }
+  .link { display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 10px 5px; min-width: 0; }
+  .arrow {
+    background: var(--panel-2); border: 1px dashed var(--line-strong);
+    border-radius: 9px; padding: 7px 8px; font-size: 11px; color: var(--ink-2);
+    display: grid; gap: 3px; line-height: 1.45;
+  }
+  .arrow .dir { font: 700 9.5px/1 var(--mono); letter-spacing: .08em; color: var(--muted); }
+  .arrow code { white-space: nowrap; background: transparent; border: 0; padding: 0; font-size: 10.5px; color: var(--accent); }
+  .arrow small { color: var(--muted); font-size: 10.5px; }
+  .bus {
+    margin-top: 10px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px;
+    align-items: center; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 14px; font-size: 12.5px;
+  }
+  .bus .badge { justify-self: start; }
+  @media (max-width: 1040px) {
+    .lanes { grid-template-columns: 1fr; }
+    .link { flex-direction: row; flex-wrap: wrap; padding: 6px 0; }
+    .arrow { flex: 1 1 220px; }
+    .bus { grid-template-columns: 1fr; gap: 6px; }
+  }
+
+  /* ── frame flow ────────────────────────────────────────── */
+  .flow { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+  .flow .node {
+    flex: 1 1 92px; min-width: 88px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 9px;
+  }
+  .flow .node .t { font: 600 10.5px/1.4 var(--mono); color: var(--ink); }
+  .flow .node .s { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+  .flow .node.mod { border-top: 2px solid var(--accent); }
+  .flow .node.io { border-top: 2px solid var(--blue); }
+  .flow .sep { align-self: center; color: var(--muted); font: 700 11px/1 var(--mono); }
+  .chain { margin: 16px 0 6px; }
+  .chain-label { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+  .chain-label b { color: var(--ink); font-size: 13px; flex: 0 0 auto; white-space: nowrap; }
+  .chain-label code { font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
+
+  /* ── tables ────────────────────────────────────────────── */
+  .tw { overflow-x: auto; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th {
+    font: 700 10.5px/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); background: var(--panel); position: sticky; top: 0;
+  }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  td code { font-size: 11.5px; white-space: normal; overflow-wrap: break-word; }
+  #anchor-table .c-pos { width: 44%; }
+  .nowrap { white-space: nowrap; }
+
+  /* ── steps / sequences ────────────────────────────────── */
+  .steps { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 7px; counter-reset: q; }
+  .steps li {
+    display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px;
+    padding: 9px 12px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; font-size: 13px;
+  }
+  .steps li::before {
+    counter-increment: q; content: counter(q);
+    font: 700 10px/2.1 var(--mono); color: var(--accent); text-align: center;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border-radius: 5px; height: 21px;
+  }
+  .steps li .why { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .actor { font: 700 9.5px/1 var(--mono); letter-spacing: .05em; padding: 3px 5px; border-radius: 4px; margin-right: 5px; white-space: nowrap; }
+  .actor.t0 { color: var(--blue); background: var(--blue-soft); }
+  .actor.t1 { color: var(--amber); background: var(--amber-soft); }
+  .actor.t2 { color: var(--accent); background: var(--accent-soft); }
+  html[data-theme="dark"] .actor { background: transparent; border: 1px solid currentColor; }
+
+  /* ── checklist ─────────────────────────────────────────── */
+  .checks { display: grid; gap: 8px; counter-reset: inv; }
+  .check {
+    display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px;
+    padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+  }
+  .check::before {
+    counter-increment: inv; content: "I" counter(inv);
+    font: 700 10px/1.7 var(--mono); color: var(--accent); letter-spacing: -.02em;
+  }
+  .check b { font-size: 13.5px; }
+  .check p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
+
+  /* ── anchor table filter ──────────────────────────────── */
+  .filterbar { display: flex; gap: 10px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  .filterbar input {
+    flex: 1 1 240px; min-width: 0;
+    background: var(--paper); border: 1px solid var(--line); color: var(--ink);
+    border-radius: 8px; padding: 9px 12px; font: 13px/1.2 var(--sans);
+  }
+  .filterbar input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; border-color: var(--accent); }
+  .filterbar .hint { font-size: 11.5px; color: var(--muted); }
+  .copy {
+    appearance: none; border: 1px solid transparent; background: transparent; color: var(--ink);
+    font: inherit; cursor: copy; padding: 1px 3px; text-align: left;
+    border-bottom: 1px dotted var(--line-strong); border-radius: 3px 3px 0 0;
+  }
+  .copy:hover { border-color: var(--line); border-bottom-color: var(--accent); background: var(--panel-2); }
+  .copy.copied { color: var(--accent); }
+  tr.hidden { display: none; }
+  .empty-row td { text-align: center; color: var(--muted); font-size: 12px; }
+
+  /* ── glossary ─────────────────────────────────────────── */
+  .glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .term { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+  .term dfn { font-style: normal; font: 650 12.5px/1.4 var(--mono); color: var(--accent); }
+  .term p { margin: 5px 0 0; font-size: 12.5px; color: var(--ink-2); }
+
+  footer {
+    max-width: 1320px; margin: 0 auto; padding: 0 28px 60px;
+    color: var(--muted); font-size: 12px;
+  }
+  footer .line { height: 1px; background: var(--line); margin-bottom: 18px; }
+
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; gap: 18px; padding-top: 8px; }
+    .toc { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 4px 14px; border-left: 0; padding-left: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 0; }
+    .toc .caption { width: 100%; margin-bottom: 2px; }
+    .toc a { margin-left: 0; padding: 3px 0; border-left: 0; }
+    .masthead { padding-top: 26px; }
+    .toolbar { position: static; margin-top: 16px; justify-content: flex-end; }
+  }
+  @media (max-width: 700px) {
+    .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .fact:last-child { grid-column: span 2; }
+    .flow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .flow .sep { display: none; }
+    .chain-label { flex-wrap: wrap; gap: 4px 8px; }
+    #anchor-table { table-layout: fixed; width: 100%; }
+    #anchor-table .c-pos { width: 52%; }
+    #anchor-table th:nth-child(3), #anchor-table td:nth-child(3) { display: none; }
+    #anchor-table th, #anchor-table td { padding: 9px 10px; }
+    #anchor-table td:first-child .copy { white-space: normal; overflow-wrap: anywhere; }
+  }
+  @media print {
+    .toc, .toolbar, .filterbar { display: none; }
+    .shell { grid-template-columns: 1fr; padding: 0; }
+    body { background: #fff; }
+    .card, .lane, .layer, .tw, .check { box-shadow: none; break-inside: avoid; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="eyebrow"><span class="dot"></span>cam2web · source guide <span class="mono">v0.1</span></div>
+  <h1>三线程，一条链，<span class="grad">两级 latest-wins</span></h1>
+  <p class="lead">
+    这个项目干的事很窄：把一块 Linux V4L2 相机的帧，按配置串成一条同步处理链，编成 JPEG，
+    用 <b>MJPEG</b> 推给浏览器；顺手把相机控件和 ToF 元数据做成 HTTP 接口。
+    窄带来的好处是边界很清楚——<b>谁拥有 fd、谁跑 CPU、谁面对网络</b>，各归各的线程。
+  </p>
+  <div class="toolbar">
+    <button class="btn" id="theme-toggle" type="button" aria-label="切换主题">◐ 主题</button>
+  </div>
+
+  <div class="facts" aria-label="关键数字">
+    <div class="fact"><div class="n">3</div><div class="k">线程（1 异步池 + 2 独占）</div></div>
+    <div class="fact"><div class="n">1</div><div class="k">帧槽深度（覆盖旧帧）</div></div>
+    <div class="fact"><div class="n">16</div><div class="k">命令队列容量（满了即 503）</div></div>
+    <div class="fact"><div class="n">4</div><div class="k">mmap 采集缓冲</div></div>
+    <div class="fact"><div class="n">20<span style="font-size:13px">ms</span></div><div class="k">采集轮询上限</div></div>
+    <div class="fact"><div class="n">250<span style="font-size:13px">ms</span></div><div class="k">设备身份巡检</div></div>
+    <div class="fact"><div class="n">5<span style="font-size:13px">s</span></div><div class="k">HTTP 写超时</div></div>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="目录">
+    <div class="caption">目录</div>
+    <a href="#map"><span class="no">00</span><span>先看哪张图</span></a>
+    <a href="#read"><span class="no">01</span><span>读码路线</span></a>
+    <a href="#structure"><span class="no">02</span><span>结构拓扑</span></a>
+    <a href="#threads"><span class="no">03</span><span>线程拓扑</span></a>
+    <a href="#frame"><span class="no">04</span><span>帧流水线拓扑</span></a>
+    <a href="#lifecycle"><span class="no">05</span><span>生命周期与装配</span></a>
+    <a href="#control"><span class="no">06</span><span>控件扫描与巡检</span></a>
+    <a href="#failure"><span class="no">07</span><span>失败语义</span></a>
+    <a href="#anchors"><span class="no">08</span><span>代码锚点</span></a>
+    <a href="#invariants"><span class="no">09</span><span>设计不变量</span></a>
+    <a href="#glossary"><span class="no">10</span><span>术语</span></a>
+  </nav>
+
+  <main>
+
+    <!-- ═══ 00 ═══ -->
+    <section id="map">
+      <div class="sec-head"><span class="sec-no">00</span><h2>先看哪张图</h2><span class="sec-sub">六张图，各回答一个问题</span></div>
+      <div class="rule"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="kicker">结构拓扑</div>
+          <h3 style="margin-top:6px">编译期：谁依赖谁</h3>
+          <p style="margin:6px 0 0;color:var(--muted);font-size:13px">
+            五个顶层模块是一条单向链：<code>http → runtime → pipeline → v4l → C shim</code>。
+            看懂回边为零，就知道改动会波及哪里。
+          </p>
+        </div>
+        <div class="card">
+          <div class="kicker">线程拓扑</div>
+          <h3 style="margin-top:6px">运行期：谁拥有谁</h3>
+          <p style="margin:6px 0 0;color:var(--muted);font-size:13px">
+            相机 fd 只被采集线程碰；CPU 重的像素活只在处理线程；
+            网络线程只做转发。三者之间只有队列和 <code>watch</code>。
+          </p>
+        </div>
+        <div class="card">
+          <div class="kicker">帧流水线拓扑</div>
+          <h3 style="margin-top:6px">一帧怎么变形</h3>
+          <p style="margin:6px 0 0;color:var(--muted);font-size:13px">
+            从 TOML 声明的 stage 链，到 <code>Layout</code> 逐级协商，
+            最后一站固定是 JPEG 编码器。中间任何一环返回 <code>None</code>，这帧就消失。
+          </p>
+        </div>
+        <div class="card">
+          <div class="kicker">生命周期拓扑</div>
+          <h3 style="margin-top:6px">三个 id 把请求绑到资源</h3>
+          <p style="margin:6px 0 0;color:var(--muted);font-size:13px">
+            <code>node_id</code> / <code>selection_id</code> / <code>session_id</code>：
+            热插拔、重选、重启预览都会换 id，旧请求自然失效。
+          </p>
+        </div>
+      </div>
+
+      <div class="note">
+        <span class="tag">一句话</span>
+        结构就是「没有回边」，线程就是「三个单写者」，流水线就是「配置驱动的纯变换」，
+        生命周期就是「用 id 做乐观并发控制」，队列就是「永不为了追帧而阻塞」。
+      </div>
+    </section>
+
+    <!-- ═══ 01 ═══ -->
+    <section id="read">
+      <div class="sec-head"><span class="sec-no">01</span><h2>读码路线</h2><span class="sec-sub">约 40 分钟走完骨架，细节再按需下沉</span></div>
+      <div class="rule"></div>
+
+      <div class="path">
+        <div class="step">
+          <div>
+            <div class="where"><code>src/main.rs</code><span class="badge">27 行</span></div>
+            <div class="why">只做装配：读配置 → 绑端口 → <code>Service::spawn</code> → <code>http::serve</code>。先建立「没有全局单例」的印象。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/runtime/mod.rs:87-129</code></div>
+            <div class="why">两个 <code>thread::Builder</code> 就是后文的 T1 / T2；<code>send_request</code> 里的 <code>try_send</code> 决定了整个命令路径「宁可失败也不排队」。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/runtime/camera.rs:87-117</code></div>
+            <div class="why">整个采集线程的心跳。四件事的顺序就是优先级：巡检 → 收命令 → 控件扫描 → 取帧。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/runtime/handoff.rs</code><span class="badge">92 行，建议整读</span></div>
+            <div class="why">深度为 1 的交接槽 + 处理循环。理解「丢帧发生在哪一层」的关键就是这 92 行。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/pipeline/mod.rs:61-145</code></div>
+            <div class="why">两段式：<code>build</code> 负责几何/格式协商，<code>process</code> 负责逐帧跑链。注意最后一站被单独摘出来计时。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/pipeline/registry.rs:44-91</code> + <code>builtins/</code></div>
+            <div class="why">kind 字符串怎么变成 trait 对象、链尾怎么强制是 JPEG；再看 ToF 两个模块，理解「一帧不产出」的合法语义。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/http/mjpeg.rs</code><span class="badge">125 行</span></div>
+            <div class="why">watch 的读者怎么变成 multipart 流；三级状态机 <code>AwaitFrame → Jpeg → EndFrame</code> 是它真正的形状。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>src/v4l/capture.rs:133-217</code></div>
+            <div class="why">REQBUFS / mmap / QBUF / poll / DQBUF / 立刻 QBUF。这是唯一直接和驱动流水线打交道的代码。</div>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <div class="where"><code>native/v4l/shim.c</code><span class="badge">302 行，可跳读</span></div>
+            <div class="why">只为了把 Linux UAPI 的 packed struct / union 关在 C 侧；Rust 只看见 POD。读 <code>call_ioctl</code> 的 EINTR 重试就够了。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note warn">
+        <span class="tag">第一遍可以跳过</span>
+        <code>v4l/capabilities.rs</code>、<code>v4l/controls.rs</code> 的字段枚举细节，以及
+        <code>web/assets/cam2web.js</code>（700 行前端：multipart 解析、编辑器生成、重连退避）。
+        它们不改变后台的拓扑。
+      </div>
+    </section>
+
+    <!-- ═══ 02 ═══ -->
+    <section id="structure">
+      <div class="sec-head"><span class="sec-no">02</span><h2>结构拓扑</h2><span class="sec-sub">编译期的依赖方向：一条向下的直线</span></div>
+      <div class="rule"></div>
+
+      <div class="layers">
+        <div class="layer" style="--tint: var(--ink-2)">
+          <div><div class="tier">L0 · BIN</div><div class="name">组装根</div><div class="duty">读配置、建线程、起 HTTP</div></div>
+          <div class="chips"><span class="chip">src/main.rs</span></div>
+          <span class="badge">无状态</span>
+        </div>
+        <div class="dep"><span>依赖 ↓</span></div>
+
+        <div class="layer" style="--tint: var(--blue)">
+          <div><div class="tier">L1 · HTTP</div><div class="name">传输与协议</div><div class="duty">路由、JSON、multipart、写超时</div></div>
+          <div class="chips">
+            <span class="chip">http/mod.rs</span><span class="chip">http/api.rs</span>
+            <span class="chip">http/mjpeg.rs</span><span class="chip">http/transport.rs</span>
+          </div>
+          <span class="badge t0">T0</span>
+        </div>
+        <div class="dep"><span>依赖 ↓</span></div>
+
+        <div class="layer" style="--tint: var(--amber)">
+          <div><div class="tier">L2 · RUNTIME</div><div class="name">唯一有状态的一层</div><div class="duty">选设备、开会话、控扫描、编排线程</div></div>
+          <div class="chips">
+            <span class="chip">runtime/mod.rs</span><span class="chip">runtime/camera.rs</span>
+            <span class="chip">runtime/session.rs</span><span class="chip">runtime/handoff.rs</span>
+            <span class="chip">runtime/discovery.rs</span><span class="chip">runtime/diagnostics.rs</span>
+          </div>
+          <span class="badge t1">T1</span>
+        </div>
+        <div class="dep"><span>依赖 ↓</span></div>
+
+        <div class="layer" style="--tint: var(--accent)">
+          <div><div class="tier">L3 · PIPELINE</div><div class="name">纯帧变换</div><div class="duty">不认识会话、不认识 HTTP、不做 I/O</div></div>
+          <div class="chips">
+            <span class="chip accent">registry</span><span class="chip accent">frame</span>
+            <span class="chip accent">module</span><span class="chip accent">metadata</span>
+            <span class="chip accent">builtins/{to_rgb, resize, himax_tof, jpeg}</span>
+          </div>
+          <span class="badge t2">T2</span>
+        </div>
+        <div class="dep"><span>依赖 ↓</span></div>
+
+        <div class="layer" style="--tint: var(--rose)">
+          <div><div class="tier">L4 · V4L</div><div class="name">驱动适配</div><div class="duty">ioctl / mmap / poll，无业务策略</div></div>
+          <div class="chips">
+            <span class="chip">v4l/mod.rs</span><span class="chip">v4l/capture.rs</span>
+            <span class="chip">v4l/controls.rs</span><span class="chip">v4l/capabilities.rs</span>
+            <span class="chip">v4l/ffi.rs</span><span class="chip">native/v4l/shim.c</span>
+          </div>
+          <span class="badge">build.rs → cc</span>
+        </div>
+        <div class="dep"><span>依赖 ↓</span></div>
+
+        <div class="layer" style="--tint: var(--line-strong)">
+          <div><div class="tier">L5 · KERNEL</div><div class="name">设备节点</div><div class="duty">/dev/videoN · 4 个 MMAP 缓冲</div></div>
+          <div class="chips"><span class="chip">/dev/video*</span><span class="chip">VIDIOC_*</span></div>
+          <span class="badge">内核</span>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">这张图在说什么</h3>
+      <div class="grid-2">
+        <div class="card">
+          <h4>没有回边</h4>
+          <p><code>v4l</code> 不知道 <code>pipeline</code>，<code>pipeline</code> 不知道 <code>Session</code>，<code>runtime</code> 不知道 <code>axum</code>。
+          唯一的小回指是 <code>pipeline</code> 用了 <code>v4l</code> 的两个值类型（<code>CaptureSpec</code>、<code>Captured</code>），这是数据契约，不是控制反转。</p>
+        </div>
+        <div class="card">
+          <h4>状态集中在 L2</h4>
+          <p>除了 <code>Camera</code> 里那几个字段，全项目没有别的地方记录「当前选了谁、预览有没有开」。
+          HTTP 层是投影：把 <code>Command</code> 发给 L2，把 <code>watch</code> 读出来；它自己不缓存状态。</p>
+        </div>
+        <div class="card">
+          <h4>L3 可单测</h4>
+          <p><code>pipeline/tests.rs</code> 构造假的 <code>CaptureSpec + Captured</code> 就能跑完整条链，不需要真相机。
+          这正是把 I/O 全部挤到 L2/L4 换来的。</p>
+        </div>
+        <div class="card">
+          <h4>C 只做 ABI 隔板</h4>
+          <p><code>shim.c</code> 把 UAPI 的 packed/union 结构和 <code>ioctl</code> 留在 C 里，
+          Rust 侧只处理 <code>repr(C)</code> 的扁平结构。改内核头文件不会把 UB 带进 safe Rust。</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <span class="tag">配置文件的位置</span>
+        <code>config.rs</code> 不在这条链上：它是「装配数据」的入口，把 TOML 变成 <code>Vec&lt;DeviceProfile&gt;</code> 交给 L2，
+        并顺手调用 <code>Pipeline::validate</code> 做一次静态检查。运行期 L4 完全不知道配置的存在。
+      </div>
+    </section>
+
+    <!-- ═══ 03 ═══ -->
+    <section id="threads">
+      <div class="sec-head"><span class="sec-no">03</span><h2>线程拓扑</h2><span class="sec-sub">运行期的所有权：三个单写者 + 四种通信原语</span></div>
+      <div class="rule"></div>
+
+      <div class="lanes">
+        <div class="lane" style="--tint: var(--blue)">
+          <h3>T0 · tokio 运行时</h3>
+          <div class="who">#[tokio::main] · axum::serve</div>
+          <ul>
+            <li><b>静态资源</b>：<code>include_str!</code> 把 HTML/CSS/JS 编进二进制</li>
+            <li><b>API handler</b>：<code>Command</code> → <code>service.request().await</code></li>
+            <li><b>MJPEG 任务</b>：每个观看者一个 stream future</li>
+            <li><b>写超时</b>：<code>TimedSocket</code> 5s，慢客户端不拖死服务</li>
+          </ul>
+          <div class="owns">持有 <code>Service</code>；不拥有任何 V4L2 状态</div>
+        </div>
+
+        <div class="link">
+          <div class="arrow">
+            <span class="dir">T0 → T1</span>
+            <code>mpsc::channel(16)</code>
+            <small>Command + oneshot · <b>try_send</b></small>
+          </div>
+          <div class="arrow">
+            <span class="dir">T1 → T0</span>
+            <code>oneshot</code>
+            <small>Reply = Result&lt;Value, Failure&gt;</small>
+          </div>
+        </div>
+
+        <div class="lane" style="--tint: var(--amber)">
+          <h3>T1 · cam2web-capture</h3>
+          <div class="who">Camera::run(requests)</div>
+          <ol>
+            <li><b>身份巡检</b> ≥250ms 一次 <code>stat()</code></li>
+            <li><b>收命令</b> try_recv；空闲且无会话时 <code>blocking_recv</code></li>
+            <li><b>控件扫描</b> 每轮最多读一个控件</li>
+            <li><b>取帧</b> <code>capture(20ms)</code> → 拷贝 → 立刻 QBUF → push</li>
+          </ol>
+          <div class="owns">独占 <code>Device</code>（fd、4 个 mmap）与 <code>Selection</code></div>
+        </div>
+
+        <div class="link">
+          <div class="arrow">
+            <span class="dir">T1 → T2</span>
+            <code>WorkSlot</code>
+            <small>Mutex + Condvar · 深度 1 · 覆盖旧帧</small>
+          </div>
+          <div class="arrow">
+            <span class="dir">共享</span>
+            <code>Arc&lt;Session&gt;</code>
+            <small>Mutex&lt;Pipeline&gt; · Mutex&lt;Diagnostics&gt;</small>
+          </div>
+        </div>
+
+        <div class="lane" style="--tint: var(--accent)">
+          <h3>T2 · cam2web-process</h3>
+          <div class="who">run_processor(&amp;work, &amp;publisher)</div>
+          <ol>
+            <li><b>take()</b> 槽空则睡在 Condvar 上</li>
+            <li><b>lock(Pipeline).process</b> 同步跑完缩放/转换/编码</li>
+            <li><b>记账</b> processing_ms / encode_ms</li>
+            <li><b>发布</b> <code>watch.send_if_modified</code>，session 必须匹配</li>
+          </ol>
+          <div class="owns">独占 pipeline 执行；除了 <code>Arc&lt;Session&gt;</code> 不碰任何 L2 状态</div>
+        </div>
+      </div>
+
+      <div class="bus">
+        <span class="badge t2">T2 → T0</span>
+        <div>
+          <code>watch&lt;Output&gt;</code>（<code>session_id</code> + <code>jpeg</code> + <code>tof_metadata</code>）广播给所有 MJPEG 连接。
+          每个连接自带一个 <code>Receiver</code>，只看最新值：<b>不排队、不背压、慢客户端丢中间帧</b>。
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">四条通道的语义</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>通道</th><th>类型</th><th>容量 / 语义</th><th>写 → 读</th><th>满了 / 落后怎么办</th></tr></thead>
+          <tbody>
+            <tr><td><code>Request</code></td><td>tokio mpsc</td><td>16 条，<code>try_send</code></td><td>T0 → T1</td><td>立刻 <code>Unavailable</code> → HTTP 503，不阻塞 handler</td></tr>
+            <tr><td><code>Responder</code></td><td>oneshot</td><td>一次性</td><td>T1 → T0</td><td>接收端已断则结果直接丢弃（<code>is_closed</code> 检查）</td></tr>
+            <tr><td><code>WorkSlot</code></td><td>Mutex + Condvar</td><td><b>1 帧</b>，latest-wins</td><td>T1 → T2</td><td>覆盖旧帧并 <code>dropped_count += 1</code></td></tr>
+            <tr><td><code>watch&lt;Output&gt;</code></td><td>watch</td><td>1 个值，多读者</td><td>T2 → T0×N</td><td>读者只看最新；<code>changed().await</code> 自动跳过中间帧</td></tr>
+            <tr><td><code>session.pipeline</code></td><td>Mutex</td><td>一把锁</td><td>T2 每帧 / T1 改参数</td><td>短临界区，不跨阻塞点持锁</td></tr>
+            <tr><td><code>session.diagnostics</code></td><td>Mutex</td><td>一把锁</td><td>T1 / T2 计数</td><td>只做自增和赋值，快照时再加锁</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin:26px 0 8px">为什么是这三个线程</h3>
+      <div class="grid-3">
+        <div class="card">
+          <h4>T1 为什么不是 async</h4>
+          <p>V4L2 的 <code>poll</code>/<code>ioctl</code> 是阻塞语义，而且 fd 必须单写者。<code>Camera</code> 是一个状态机，
+          把它钉在一个 OS 线程上，就不需要任何锁来保护 fd、<code>Selection</code>、<code>Device</code>。</p>
+        </div>
+        <div class="card">
+          <h4>T2 为什么要独立</h4>
+          <p>YUV→RGB、最近邻缩放、JPEG 编码全是同步 CPU 活，单帧可能几毫秒到几十毫秒。
+          放在 tokio worker 上会卡住别的连接；放在 T1 上会拖慢采集。所以单独一条线程，只认队列。</p>
+        </div>
+        <div class="card">
+          <h4>为什么不接着加线程</h4>
+          <p>像素链天生串行（下一级的输入是上一级的输出）。再并行只能按帧并行，而实时预览里
+          并行只会增加延迟和内存占用，不会提高有效帧率。</p>
+        </div>
+      </div>
+
+      <div class="note">
+        <span class="tag">关闭顺序是设计的一部分</span>
+        <code>http::serve</code> 结束后 <code>Service</code> 被 drop → mpsc 发送端归零 → T1 的 <code>blocking_recv</code> 返回 <code>None</code>
+        → 退出循环、<code>stop_preview()</code>、<code>work.close()</code> → T2 的 <code>take()</code> 醒来返回 <code>None</code>。
+        <code>close()</code> 存在的唯一理由，就是别让 T2 永远睡在 Condvar 上。
+      </div>
+    </section>
+
+    <!-- ═══ 04 ═══ -->
+    <section id="frame">
+      <div class="sec-head"><span class="sec-no">04</span><h2>帧流水线拓扑</h2><span class="sec-sub">从 mmap 到 multipart，只经过一次拷贝和一条同步链</span></div>
+      <div class="rule"></div>
+
+      <div class="card">
+        <div class="chain">
+          <div class="chain-label"><b>通用路径</b><code>V4L2 → 拷贝 → WorkSlot → Pipeline → watch → HTTP</code></div>
+          <div class="flow">
+            <div class="node io"><div class="t">mmap buffer</div><div class="s">4 个 · 驱动写</div></div>
+            <div class="sep">→</div>
+            <div class="node io"><div class="t">poll + DQBUF</div><div class="s">≤20ms 等待</div></div>
+            <div class="sep">→</div>
+            <div class="node io"><div class="t">copy → Vec</div><div class="s">唯一一次整帧拷贝</div></div>
+            <div class="sep">→</div>
+            <div class="node io"><div class="t">QBUF</div><div class="s">立刻还给驱动</div></div>
+            <div class="sep">→</div>
+            <div class="node mod"><div class="t">WorkSlot(1)</div><div class="s">旧帧被覆盖</div></div>
+            <div class="sep">→</div>
+            <div class="node mod"><div class="t">Pipeline</div><div class="s">同步 stage 链</div></div>
+            <div class="sep">→</div>
+            <div class="node mod"><div class="t">watch&lt;Output&gt;</div><div class="s">最新一帧</div></div>
+            <div class="sep">→</div>
+            <div class="node io"><div class="t">multipart</div><div class="s">每连接一个读者</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chain">
+        <div class="chain-label"><b>himax_rgb</b><code>1600×1200 YUYV → 800×600 → JPEG</code></div>
+        <div class="flow">
+          <div class="node io"><div class="t">YUYV 1600×1200</div><div class="s">stride 由驱动协商</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">to_rgb</div><div class="s">BT.601 limited → RGB3</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">RGB3 1600×1200</div><div class="s">packed</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">resize_nearest</div><div class="s">1280→800，960→600</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">RGB3 800×600</div><div class="s">packed</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">jpeg_encode(80)</div><div class="s">单独计时</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">JPEG</div><div class="s">watch.jpeg</div></div>
+        </div>
+      </div>
+
+      <div class="chain">
+        <div class="chain-label"><b>himax_tof</b><code>1280×481 RGGB → 两帧合成一张左右拼接图</code></div>
+        <div class="flow">
+          <div class="node io"><div class="t">RGGB 1280×481</div><div class="s">第 481 行是嵌入行</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">himax_tof_metadata</div><div class="s">解析通道/时间戳，截掉嵌入行</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">ToF16 640×480</div><div class="s">Depth 或 NIR</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">himax_tof_pair</div><div class="s">等相邻的另一半；不成对返回 None</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">Grey 1280×480</div><div class="s">depth ｜ nir</div></div>
+          <div class="sep">→</div>
+          <div class="node mod"><div class="t">jpeg_encode(80)</div><div class="s">灰阶 L8</div></div>
+          <div class="sep">→</div>
+          <div class="node io"><div class="t">JPEG + 元数据</div><div class="s">/api/metadata</div></div>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">每个 stage 的契约</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>kind</th><th>输入 → 输出</th><th>几何 / 布局</th><th>有状态？</th><th>关键点</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="nowrap"><code>to_rgb</code></td>
+              <td>YUYV / GREY / RGB3 → RGB3</td>
+              <td>同尺寸，去 stride 补成 packed</td>
+              <td>无</td>
+              <td>已经是 RGB3 就直接透传；YUV 用整数 BT.601 limited range</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>resize_nearest</code></td>
+              <td>RGB3 → RGB3</td>
+              <td>强制 <code>width×height</code>，packed</td>
+              <td>无</td>
+              <td>整数最近邻，无插值；尺寸相同时直接透传</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>himax_tof_metadata</code></td>
+              <td>RGGB 1280×481 → ToF16 640×480</td>
+              <td>行字节数不变，只截掉最后一行</td>
+              <td>无</td>
+              <td>嵌入行 <code>[1]</code> 决定 Depth/NIR；顺带解析传感器时钟</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>himax_tof_pair</code></td>
+              <td>ToF16 → Grey</td>
+              <td>宽 ×2，左右拼接</td>
+              <td><b>是</b>：缓存上一半 + 256 级 NIR LUT</td>
+              <td>要求 <code>sequence+1</code>、<code>sensor_frame_count+1</code>、通道不同、同会话；Depth 做 1%–99% 拉伸，NIR 取对数</td>
+            </tr>
+            <tr>
+              <td class="nowrap"><code>jpeg_encode</code></td>
+              <td>RGB3 / Grey → JPEG</td>
+              <td>尺寸不变，<code>stride_bytes = 0</code></td>
+              <td>是：<code>quality</code></td>
+              <td>唯一的在线可写参数；<code>output_layout</code> 会检查 u32 像素索引上限</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2" style="margin-top:14px">
+        <div class="note" style="margin:0">
+          <span class="tag"><code>Ok(None)</code> 不是错误</span>
+          <code>process</code> 返回 <code>None</code> 表示「这一帧合法地不产出」，比如 ToF 只拿到一半。
+          Pipeline 会立刻结束本次处理，不发布、不计数、不报错。异常必须走 <code>Err</code>，两者语义不要混。
+        </div>
+        <div class="note warn" style="margin:0">
+          <span class="tag">最后一站是特殊的</span>
+          <code>split_last_mut</code> 把编码器摘出来，单独统计 <code>encode_duration</code>；
+          其余 stage 只做变换。若配置里 <code>output</code> 之外没有任何模块，链就是「一帧直通编码」。
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">两级丢帧，延迟有上界</h3>
+      <div class="grid-2">
+        <div class="card">
+          <h4>第一级：T1 → T2</h4>
+          <p>处理不过来时，<code>WorkSlot</code> 只保留最新一帧，旧的直接覆盖并记 <code>dropped_count</code>。
+          采集线程永远不会因为处理慢而阻塞。</p>
+        </div>
+        <div class="card">
+          <h4>第二级：T2 → 浏览器</h4>
+          <p><code>watch</code> 只有「当前值」。浏览器解码不及时，中间帧自然被跳过，不会在服务端堆积。
+          两级都选「丢旧的」，端到端延迟 ≈ 一帧处理时间。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ 05 ═══ -->
+    <section id="lifecycle">
+      <div class="sec-head"><span class="sec-no">05</span><h2>生命周期与装配</h2><span class="sec-sub">三个 id、三次校验、一条启动时序</span></div>
+      <div class="rule"></div>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>id</th><th>生成时机</th><th>作用域</th><th>失效后</th></tr></thead>
+          <tbody>
+            <tr><td><code>node_id</code></td><td>扫描 <code>/dev/video*</code> 得到路径字符串</td><td>一台设备节点</td><td>直接 409：节点不在列表里了</td></tr>
+            <tr><td><code>selection_id</code></td><td><code>Select</code> 成功后 <code>next_id()</code></td><td>一次「选中」</td><td>重选、热插拔、设备错误都会换 → 旧命令 409</td></tr>
+            <tr><td><code>session_id</code></td><td><code>start_preview</code> 成功后 <code>next_id()</code></td><td>一次预览</td><td>停流、重开、设备错误 → MJPEG 连接结束（410/自然结束）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="tag">身份不是设备号</span>
+        <code>DeviceIdentity = (dev, ino, rdev)</code>。<code>/dev/videoN</code> 会被 udev 复用，
+        所以匹配配置靠 <b>card 名字</b>（去掉 <code>vi-output,</code> 前缀，把 <code>-</code> 换成 <code>_</code>），
+        校验仍是 <code>stat</code> 的三个字段。重名直接报「ambiguous」，不做猜测。
+      </div>
+
+      <h3 style="margin:24px 0 8px">校验发生三次，越往后越接近真相</h3>
+      <div class="grid-3">
+        <div class="card">
+          <div class="kicker">① 加载配置</div>
+          <p style="margin-top:6px"><code>Config::parse</code> → <code>Pipeline::validate</code>：只按 <b>请求的 FourCC</b> 检查 kind 是否合法、链尾是否为 JPEG。
+          不碰设备。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">② 启动前</div>
+          <p style="margin-top:6px"><code>start_preview</code> 再 validate 一次：防止配置热更新/请求格式与选中 profile 不一致。</p>
+        </div>
+        <div class="card">
+          <div class="kicker">③ 协商后</div>
+          <p style="margin-top:6px"><code>Pipeline::build(created spec)</code>：用驱动真正返回的 <code>stride_bytes</code> / <code>sizeimage</code> 重算每一级 <code>Layout</code>，
+          这才是每帧校验的基准。</p>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">启动预览的完整时序</h3>
+      <ol class="steps">
+        <li><span><span class="actor t0">T0</span><code>POST /api/start {node_id, selection_id, format?}</code> → <code>Command::Start</code><span class="why">format 省略就用 profile 里的默认值。</span></span></li>
+        <li><span><span class="actor t0">T0</span><code>try_send</code> 后 <code>await</code> oneshot<span class="why">队列满就直接 503，不等。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>require_target</code>：node_id + selection_id 必须仍然匹配<span class="why">不匹配 = 你手上的状态过期了 = 409。</span></span></li>
+        <li><span><span class="actor t1">T1</span>检查 <code>can_stream</code>，按 identity 取 profile<span class="why">没有配置就拒绝（该相机无已知 pipeline）。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>validate_format</code> + <code>Pipeline::validate</code><span class="why">在动设备之前把明显错的格式挡掉。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>stop_preview()</code>：取消扫描、watch 复位、<code>work.clear()</code>、旧 session 快照<span class="why">旧会话先干净地死掉，再谈新会话。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>device.start</code>：S_FMT → G/S_PARM → REQBUFS(4) → mmap → QBUF×4 → STREAMON<span class="why">失败会回滚（STREAMOFF + 释放 buffer），并把错误串起来。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>Pipeline::build(协商后的 spec)</code><span class="why">真实 stride 决定输入 Layout；每一级 <code>output_layout</code> 再验证一次几何。</span></span></li>
+        <li><span><span class="actor t1">T1</span>恢复按 profile 名记忆的在线参数<span class="why">设置失败的参数会回退到实际值，并写进 <code>last_error</code>，不影响开流。</span></span></li>
+        <li><span><span class="actor t1">T1</span><code>session_id = next_id()</code>；watch 先发布 <code>{session_id, jpeg: None}</code>，再建 <code>Arc&lt;Session&gt;</code><span class="why">浏览器可以在这之后立刻订阅 /stream/{id}，等第一帧。</span></span></li>
+        <li><span><span class="actor t0">T0</span>返回 status JSON（selection / preview / diagnostics / last_error）<span class="why">前端据此切到 MJPEG 地址，并继续轮询 status 看指标。</span></span></li>
+      </ol>
+
+      <div class="note warn">
+        <span class="tag">失败也想让你看到原因</span>
+        只有 <code>Invalid</code> 错误会写进 <code>last_error</code>（且只限 Select/Start/Stop/Control/Parameter 这类变更命令）。
+        <code>Stale</code> 和 <code>Unavailable</code> 是并发/拥塞信号，不污染错误面板。
+      </div>
+    </section>
+
+    <!-- ═══ 06 ═══ -->
+    <section id="control">
+      <div class="sec-head"><span class="sec-no">06</span><h2>控件扫描与设备巡检</h2><span class="sec-sub">两条不能阻塞采集的慢路径</span></div>
+      <div class="rule"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>控件扫描：把一次大 ioctl 拆成很多小步</h3>
+          <p style="font-size:13px;color:var(--muted)">读控件可能涉及枚举 + 逐个读值 + 展开菜单，全部做完可能要十几毫秒。做法是只枚举描述符，然后每个事件循环轮次只读一个：</p>
+          <ol class="steps" style="margin-bottom:4px">
+            <li><span><span class="actor t0">T0</span><code>GET /api/controls</code> → <code>Request::Controls</code></span></li>
+            <li><span><span class="actor t1">T1</span><code>enumerate_controls</code> 拿到描述符队列，构造 <code>ControlScan</code></span></li>
+            <li><span><span class="actor t1">T1</span>每轮 <code>step()</code> 读一个控件（含菜单子项）</span></li>
+            <li><span><span class="actor t1">T1</span>单步 ≥ 10ms 且正在预览 → 推迟 50ms 再继续</span></li>
+            <li><span><span class="actor t1">T1</span>扫完一次性回 JSON 数组</span></li>
+          </ol>
+          <p style="font-size:12.5px;color:var(--muted);margin-bottom:0">扫描期间 <code>Select / Stop / Control</code> 会取消它，responder 收到 <code>Stale</code> → 409。</p>
+        </div>
+        <div class="card">
+          <h3>为什么让 50ms</h3>
+          <p style="font-size:13px">ToF 的成像依赖 <b>相邻两帧</b>：一半 Depth、一半 NIR，且 <code>sequence</code> 与传感器帧计数都要差 1。
+          控件读取拖慢采集，就会丢中间帧，配对失败 → 预览一阵一阵地黑。</p>
+          <p style="font-size:13px">所以常量是成对出现的：</p>
+          <ul style="font-size:13px">
+            <li><code>SLOW_CONTROL = 10ms</code>：判定「这一步拖慢了采集」</li>
+            <li><code>CAPTURE_RECOVERY = 50ms</code>：让采集线程安静地跑几帧</li>
+          </ul>
+          <p style="font-size:13px;margin-bottom:0">这也解释了 <code>himax_tof_pair</code> 为什么允许 <code>None</code>：丢掉不配对的帧，比合成一张错位的图更好。</p>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 8px">身份巡检与设备掉线</h3>
+      <div class="grid-2">
+        <div class="card">
+          <h4>周期巡检</h4>
+          <p>每 ≥250ms 对当前路径做一次 <code>stat</code>，比较 <code>(dev, ino, rdev)</code>。
+          不一致说明节点被拔掉或复用，立刻 <code>invalidate</code>：停预览、清 selection、写 <code>last_error</code>。</p>
+        </div>
+        <div class="card">
+          <h4>被动发现</h4>
+          <p>任何 ioctl 返回 <code>ENODEV / ENXIO / EBADF</code>，<code>track_device_error</code> 会走同一条 <code>invalidate</code>。
+          <code>poll</code> 的 <code>POLLHUP</code> 映射成 <code>ENODEV</code>、<code>POLLNVAL</code> 映射成 <code>EBADF</code>，殊途同归。</p>
+        </div>
+      </div>
+      <div class="note">
+        <span class="tag">前端看到的是什么</span>
+        status 里 <code>preview</code> 变回 <code>null</code>，<code>last_error</code> 给出原因；MJPEG 连接因为 session 不匹配自然结束。
+        用户需要重新「选设备 → 启动预览」，没有自动重连——这是刻意的，热插拔后的节点可能已经不是同一块相机。
+      </div>
+    </section>
+
+    <!-- ═══ 07 ═══ -->
+    <section id="failure">
+      <div class="sec-head"><span class="sec-no">07</span><h2>失败语义</h2><span class="sec-sub">三条失败路径，三种 HTTP 状态</span></div>
+      <div class="rule"></div>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Failure</th><th>含义</th><th>HTTP</th><th>典型来源</th></tr></thead>
+          <tbody>
+            <tr><td><code>Invalid</code></td><td>参数/格式/设备协商失败，重试同样的请求也没用</td><td>422</td><td>S_FMT 不支持、FourCC 非法、JPEG quality 越界、没有匹配 profile</td></tr>
+            <tr><td><code>Stale</code></td><td>你手上的 selection/session 已经过期</td><td>409</td><td>重选设备、预览已停、扫描被取消、节点被替换</td></tr>
+            <tr><td><code>Unavailable</code></td><td>此刻系统忙或不在线</td><td>503</td><td>命令队列满（16）、采集线程已退出、已有扫描在跑</td></tr>
+            <tr><td><code>410</code></td><td>这个 session 已经结束</td><td>410</td><td>请求 <code>/stream/{旧id}</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2" style="margin-top:14px">
+        <div class="card">
+          <h4>每一帧的自检</h4>
+          <p><code>bytesused</code> 必须落在 <code>min_capture_bytes..=max_capture_bytes</code>：
+          下界由 Layout 算（含 stride），上界是驱动报的 <code>sizeimage</code>。
+          驱动标记 <code>V4L2_BUF_FLAG_ERROR</code> 或 <code>bytesused == 0</code> 的帧不进入流水线，只增加 <code>invalid_capture_count</code>。</p>
+        </div>
+        <div class="card">
+          <h4>超时与 EINTR</h4>
+          <p><code>wait_readable</code> 用绝对 deadline 循环：<code>EINTR</code> 不算失败，重算剩余时间接着等；
+          <code>DQBUF</code> 的 <code>EAGAIN</code> 也回到 poll。20ms 到点就返回 <code>Timeout</code>，主循环继续转，不视为错误。</p>
+        </div>
+      </div>
+
+      <h3 style="margin:24px 0 8px">诊断字段怎么读</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>字段</th><th>含义</th><th>什么时候值得注意</th></tr></thead>
+          <tbody>
+            <tr><td><code>captured_count</code></td><td>成功出队的帧数</td><td>对比相机标称帧率判断带宽/曝光</td></tr>
+            <tr><td><code>dropped_count</code></td><td>WorkSlot 覆盖旧帧的次数</td><td>持续增长 = 处理链比采集慢，瓶颈在 T2</td></tr>
+            <tr><td><code>invalid_capture_count</code></td><td>驱动报错或零字节的帧</td><td>增长 = 驱动/带宽/格式协商问题，不是 CPU</td></tr>
+            <tr><td><code>processing_error_count</code></td><td>链上返回 <code>Err</code> 的次数</td><td>看 <code>last_processing_error</code> 定位到具体 module</td></tr>
+            <tr><td><code>capture_fps</code> / <code>output_fps</code></td><td>会话开始至今的<b>平均值</b></td><td>不是瞬时值；短时间抖动看不出来</td></tr>
+            <tr><td><code>last_processing_ms</code> / <code>last_encode_ms</code></td><td>最近一帧总耗时 / 其中编码耗时</td><td>两者接近说明瓶颈就在 JPEG</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══ 08 ═══ -->
+    <section id="anchors">
+      <div class="sec-head"><span class="sec-no">08</span><h2>代码锚点</h2><span class="sec-sub">按关键词过滤，点击路径复制</span></div>
+      <div class="rule"></div>
+
+      <div class="filterbar">
+        <input id="anchor-filter" type="search" placeholder="过滤：start / mjpeg / 控件 / 编码 …（按 / 聚焦）" aria-label="过滤代码锚点">
+        <span class="hint" id="anchor-count"></span>
+      </div>
+
+      <div class="tw">
+        <table id="anchor-table">
+          <thead><tr><th class="c-pos">位置</th><th>做什么</th><th>关键词</th></tr></thead>
+          <tbody>
+            <tr><td><button class="copy mono" data-copy="src/main.rs:20-26">src/main.rs:20-26</button></td><td>装配入口：读配置、绑端口、起服务</td><td>startup, wiring</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/mod.rs:87-106">src/runtime/mod.rs:87-106</button></td><td><code>Service::spawn</code>：建两条 OS 线程、mpsc、watch</td><td>thread spawn</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/mod.rs:118-124">src/runtime/mod.rs:118-124</button></td><td><code>try_send</code> + oneshot：命令路径永不阻塞</td><td>backpressure 503</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/camera.rs:87-117">src/runtime/camera.rs:87-117</button></td><td>采集线程事件循环与优先级</td><td>loop scheduling</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/camera.rs:435-504">src/runtime/camera.rs:435-504</button></td><td><code>start_preview</code>：协商、建链、恢复参数、发布 session</td><td>start preview</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/camera.rs:419-433">src/runtime/camera.rs:419-433</button></td><td><code>stop_preview</code>：停流、清槽、快照诊断</td><td>stop cleanup</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/camera.rs:506-538">src/runtime/camera.rs:506-538</button></td><td><code>poll_frame</code>：捕获事件分诊 + push</td><td>capture hot path</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/camera.rs:131-205">src/runtime/camera.rs:131-205</button></td><td>控件扫描的启动、单步、取消</td><td>control scan</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/handoff.rs:20-59">src/runtime/handoff.rs:20-59</button></td><td><code>WorkSlot</code>：深度 1、Condvar、close</td><td>handoff drop frame</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/handoff.rs:61-92">src/runtime/handoff.rs:61-92</button></td><td><code>run_processor</code>：处理、计时、发布</td><td>process loop</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/runtime/discovery.rs:178-190">src/runtime/discovery.rs:178-190</button></td><td>设备身份 <code>(dev, ino, rdev)</code></td><td>identity hotplug</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/pipeline/mod.rs:61-93">src/pipeline/mod.rs:61-93</button></td><td><code>Pipeline::build</code>：校验协商布局，逐级算 Layout</td><td>build negotiate</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/pipeline/mod.rs:108-145">src/pipeline/mod.rs:108-145</button></td><td><code>process_frame</code>：字节数校验、逐级变换、编码计时</td><td>process frame</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/pipeline/registry.rs:44-91">src/pipeline/registry.rs:44-91</button></td><td><code>assemble</code>：kind → 模块、ID 去重、链尾必须 JPEG</td><td>registry assemble</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/pipeline/builtins/himax_tof.rs:53-92">src/pipeline/builtins/himax_tof.rs:53-92</button></td><td>ToF 配对规则与左右拼接</td><td>tof pair</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/http/mjpeg.rs:56-85">src/http/mjpeg.rs:56-85</button></td><td>MJPEG 订阅：session 校验 + 流式 body</td><td>mjpeg stream</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/http/mjpeg.rs:27-53">src/http/mjpeg.rs:27-53</button></td><td>multipart 三级状态机</td><td>multipart latest</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/http/api.rs:16-31">src/http/api.rs:16-31</button></td><td>全部 API 路由表</td><td>routes endpoints</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/http/transport.rs:44-65">src/http/transport.rs:44-65</button></td><td>5 秒写超时的实现</td><td>timeout slow client</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/v4l/capture.rs:133-149">src/v4l/capture.rs:133-149</button></td><td>REQBUFS → mmap → QBUF×4 → STREAMON</td><td>mmap start</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/v4l/capture.rs:171-217">src/v4l/capture.rs:171-217</button></td><td><code>capture</code>：poll 等待、DQBUF、拷贝后立刻 QBUF</td><td>dequeue requeue</td></tr>
+            <tr><td><button class="copy mono" data-copy="src/v4l/capture.rs:267-308">src/v4l/capture.rs:267-308</button></td><td><code>wait_readable</code>：deadline、EINTR、POLLHUP/NVAL</td><td>poll errno</td></tr>
+            <tr><td><button class="copy mono" data-copy="native/v4l/shim.c:56-63">native/v4l/shim.c:56-63</button></td><td><code>call_ioctl</code>：EINTR 重试并把 errno 变成负数</td><td>ioctl shim</td></tr>
+            <tr><td><button class="copy mono" data-copy="config/orin.toml">config/orin.toml</button></td><td>两条参考链：RGB 缩放到 800×600、ToF 拼图</td><td>config example</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══ 09 ═══ -->
+    <section id="invariants">
+      <div class="sec-head"><span class="sec-no">09</span><h2>设计不变量</h2><span class="sec-sub">改代码之前先确认它有没有被破坏</span></div>
+      <div class="rule"></div>
+
+      <div class="checks">
+        <div class="check"><div><b>fd 只有一个所有者</b><p><code>Device</code> 只在 T1 上被可变借用；T2 拿到的是 <code>Arc&lt;Session&gt;</code>，里面没有 fd。任何跨线程持有 fd 的新设计都要先推翻这条。</p></div></div>
+        <div class="check"><div><b>DQBUF 之后立刻 QBUF</b><p>4 个 buffer 是驱动流水线的全部产能。拷贝是刻意付出的代价，换的是「用户态处理慢也不会饿死驱动」。</p></div></div>
+        <div class="check"><div><b>队列永远不为了追帧而阻塞</b><p>命令用 <code>try_send</code>，帧槽覆盖旧值，watch 只留最新。三处都选择「快速失败或丢弃」，没有一处会反压到相机。</p></div></div>
+        <div class="check"><div><b>session_id 是发布闸门</b><p>T2 发布前比对 <code>output.session_id</code>，MJPEG 读取时再比对一次。这样「旧处理结果」既不会污染新会话，也不会串到别人的连接里。</p></div></div>
+        <div class="check"><div><b>锁不跨阻塞点</b><p><code>poll_frame</code> 里先 <code>drop(diagnostics)</code> 再 <code>work.push</code>；处理线程先放掉 pipeline 锁再取 diagnostics 锁。没有任何地方持锁做 ioctl、等待或 send。</p></div></div>
+        <div class="check"><div><b>失败必须清场</b><p>开流失败回滚 buffer，编码链构建失败回滚 V4L2，停流失败撤销 selection。没有「半开」状态：<code>session</code> 要么完整，要么不存在。</p></div></div>
+        <div class="check"><div><b>结构不可变，参数可变</b><p>stage 链在 <code>build</code> 时定型；运行期只能通过 <code>set_parameter</code> 改 <code>quality</code> 这类白名单参数。想换链就重开会话。</p></div></div>
+        <div class="check"><div><b>采集优先于控件与管理</b><p>每轮循环只推进一个控件；慢操作之后主动让 50ms。所有「顺手做点别的事」的设计都必须服从这个优先级。</p></div></div>
+        <div class="check"><div><b>驱动错误统一入口</b><p>识别设备丢失的 errno 只出现在 <code>track_device_error</code> 一处；不要在各调用点复制这套判断。</p></div></div>
+        <div class="check"><div><b>C 侧只暴露 POD</b><p><code>ffi.rs</code> 里的结构必须和 <code>shim.c</code> 的 <code>struct cam_*</code> 一一对应。新增 ioctl 时两边同步改，Rust 侧不要直接声明 UAPI 结构。</p></div></div>
+      </div>
+    </section>
+
+    <!-- ═══ 10 ═══ -->
+    <section id="glossary">
+      <div class="sec-head"><span class="sec-no">10</span><h2>术语</h2><span class="sec-sub">在这份代码里的具体含义</span></div>
+      <div class="rule"></div>
+
+      <div class="glossary">
+        <div class="term"><dfn>FourCC</dfn><p>四字节像素格式标识，如 <code>YUYV</code>、<code>RGGB</code>。<code>PixelFormat</code> 是它的内部类型。</p></div>
+        <div class="term"><dfn>Layout</dfn><p>一帧的内存几何：格式 + 宽高 + 每行字节数。所有 stage 的输入输出都用它描述，不靠隐式约定。</p></div>
+        <div class="term"><dfn>stride_bytes</dfn><p>驱动给的行跨度，可能大于有效行宽（有 padding）。<code>required_bytes</code> 只算到最后一行的有效字节。</p></div>
+        <div class="term"><dfn>sizeimage</dfn><p>驱动为整帧分配的最大字节数，是每帧校验的上界；下界由 Layout 算出来。</p></div>
+        <div class="term"><dfn>DQBUF / QBUF</dfn><p>出队 / 入队。出队后 buffer 归用户态，必须尽快入队，驱动才能继续采。</p></div>
+        <div class="term"><dfn>selection</dfn><p>一次「选中某设备」的上下文：fd、能力、匹配到的 profile、<code>selection_id</code>。</p></div>
+        <div class="term"><dfn>session</dfn><p>一次预览：协商后的 <code>CaptureSpec</code>、<code>Pipeline</code>、诊断计数、<code>session_id</code>。</p></div>
+        <div class="term"><dfn>stage</dfn><p>链上的一级，绑定一个模块实例和它声明的输出 Layout。</p></div>
+        <div class="term"><dfn>latest-wins</dfn><p>只保留最新值：帧槽覆盖旧帧，watch 只暴露当前值。用来把延迟钉死在一个常量上。</p></div>
+        <div class="term"><dfn>invalidate</dfn><p>发现设备消失/被替换后的一步到位清理：停预览、清 selection、记录原因。</p></div>
+        <div class="term"><dfn>wrapping_add</dfn><p>ToF 帧计数是 u16/u32 的自然回绕，配对判断用它避免「刚好跨过最大值」时误判。</p></div>
+        <div class="term"><dfn>V4L2_BUF_FLAG_ERROR</dfn><p>驱动标记「这帧数据不可信」。这类帧只计数，不进流水线。</p></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="line"></div>
+  cam2web 源码导读 · 对照版本：<span class="mono">Cargo.toml v0.1.0 / edition 2024</span> ·
+  生成日期 2026-11-20 · 单文件、无外部依赖，可直接离线打开
+</footer>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const toggle = document.getElementById('theme-toggle');
+  const saved = localStorage.getItem('cam2web-theme');
+  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  const setTheme = theme => {
+    root.dataset.theme = theme;
+    toggle.textContent = theme === 'dark' ? '☀ 主题' : '◐ 主题';
+    toggle.setAttribute('aria-pressed', String(theme === 'dark'));
+  };
+  setTheme(saved || (prefersDark ? 'dark' : 'light'));
+  toggle.addEventListener('click', () => {
+    const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('cam2web-theme', next);
+    setTheme(next);
+  });
+
+  // TOC active section
+  const links = [...document.querySelectorAll('.toc a')];
+  const sections = links
+    .map(link => document.querySelector(link.getAttribute('href')))
+    .filter(Boolean);
+  const active = new Map();
+  const mark = id => {
+    links.forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#' + id));
+  };
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => active.set(entry.target.id, entry.isIntersecting ? entry.intersectionRatio : 0));
+    let best = null, bestRatio = 0;
+    active.forEach((ratio, id) => { if (ratio > bestRatio) { best = id; bestRatio = ratio; } });
+    if (best) mark(best);
+  }, { rootMargin: '-84px 0px -55% 0px', threshold: [0, .2, .6, 1] });
+  sections.forEach(section => observer.observe(section));
+
+  // Anchor filtering
+  const filter = document.getElementById('anchor-filter');
+  const table = document.getElementById('anchor-table');
+  const rows = [...table.tBodies[0].rows];
+  const count = document.getElementById('anchor-count');
+  const empty = document.createElement('tr');
+  empty.className = 'empty-row';
+  empty.innerHTML = '<td colspan="3">没有匹配的锚点</td>';
+  const apply = () => {
+    const query = filter.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(row => {
+      const hit = !query || row.textContent.toLowerCase().includes(query);
+      row.classList.toggle('hidden', !hit);
+      if (hit) shown++;
+    });
+    count.textContent = shown === rows.length ? rows.length + ' 条' : shown + ' / ' + rows.length + ' 条';
+    if (shown === 0 && !empty.isConnected) table.tBodies[0].append(empty);
+    if (shown !== 0 && empty.isConnected) empty.remove();
+  };
+  filter.addEventListener('input', apply);
+  apply();
+  document.addEventListener('keydown', event => {
+    if (event.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
+      event.preventDefault();
+      filter.focus();
+      filter.select();
+    }
+  });
+
+  // Copy anchors
+  const flash = button => {
+    const original = button.textContent;
+    button.textContent = '已复制';
+    button.classList.add('copied');
+    setTimeout(() => { button.textContent = original; button.classList.remove('copied'); }, 1100);
+  };
+  document.querySelectorAll('.copy').forEach(button => {
+    button.type = 'button';
+    button.title = '复制路径与行号';
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        flash(button);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(button);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        flash(button);
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

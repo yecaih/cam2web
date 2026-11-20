@@ -1,0 +1,45 @@
+listen = "0.0.0.0:8766"
+
+[[devices]]
+name = "himax_rgb"
+
+[devices.capture]
+fourcc = "YUYV"
+width = 1600
+height = 1200
+
+[[devices.pipeline.modules]]
+id = "color"
+kind = "to_rgb"
+
+[[devices.pipeline.modules]]
+id = "preview_size"
+kind = "resize_nearest"
+width = 800
+height = 600
+
+[devices.pipeline.output]
+id = "jpeg"
+kind = "jpeg_encode"
+quality = 80
+
+[[devices]]
+name = "himax_tof"
+
+[devices.capture]
+fourcc = "RGGB"
+width = 1280
+height = 481
+
+[[devices.pipeline.modules]]
+id = "metadata"
+kind = "himax_tof_metadata"
+
+[[devices.pipeline.modules]]
+id = "tof"
+kind = "himax_tof_pair"
+
+[devices.pipeline.output]
+id = "jpeg"
+kind = "jpeg_encode"
+quality = 80
