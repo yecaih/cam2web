@@ -6,7 +6,7 @@ use super::{
     frame::{Frame, FrameIdentity, Layout, PixelFormat},
     module::Module,
 };
-use crate::v4l::{CaptureSpec, Captured};
+use crate::v4l::{CaptureSpec, CapturedFrame};
 use image::{ImageFormat, load_from_memory_with_format};
 use serde_json::json;
 
@@ -28,8 +28,8 @@ fn capture_spec(fourcc: &str, width: u32, stride_bytes: u32) -> CaptureSpec {
     }
 }
 
-fn captured(bytes: &[u8]) -> Captured {
-    Captured {
+fn captured(bytes: &[u8]) -> CapturedFrame {
+    CapturedFrame {
         bytes: bytes.to_vec(),
         sequence: 42,
     }

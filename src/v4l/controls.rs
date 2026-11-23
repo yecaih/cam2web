@@ -3,8 +3,8 @@ use std::{io, os::fd::RawFd};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
-use super::Device;
-use super::ffi::{self, RawMenu, has_errno, is_device_lost, text};
+use super::ffi::{self, RawMenu, has_errno, text};
+use super::{Device, is_device_lost};
 
 #[derive(Clone, Copy, Serialize, Debug)]
 #[serde(rename_all = "snake_case")]

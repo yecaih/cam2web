@@ -10,15 +10,15 @@ use std::{
 };
 
 #[derive(Serialize)]
-pub(super) struct Preview {
+pub(super) struct PreviewSnapshot {
     pub(super) session_id: u64,
     requested: FormatRequest,
     spec: CaptureSpec,
 }
 
 pub(super) struct Session {
-    pub(super) preview: Preview,
-    started: Instant,
+    pub(super) preview: PreviewSnapshot,
+    started_at: Instant,
     pub(super) pipeline: Mutex<Pipeline>,
     pub(super) diagnostics: Mutex<Diagnostics>,
 }
@@ -31,12 +31,12 @@ impl Session {
         pipeline: Pipeline,
     ) -> Self {
         Self {
-            preview: Preview {
+            preview: PreviewSnapshot {
                 session_id,
                 requested,
                 spec,
             },
-            started: Instant::now(),
+            started_at: Instant::now(),
             pipeline: Mutex::new(pipeline),
             diagnostics: Mutex::default(),
         }
@@ -44,9 +44,9 @@ impl Session {
 
     pub(super) fn snapshot(&self) -> Diagnostics {
         let mut diagnostics = lock(&self.diagnostics).clone();
-        let seconds = self.started.elapsed().as_secs_f64().max(0.001);
-        diagnostics.capture_fps = diagnostics.captured_count as f64 / seconds;
-        diagnostics.output_fps = diagnostics.output_count as f64 / seconds;
+        let elapsed_seconds = self.started_at.elapsed().as_secs_f64().max(0.001);
+        diagnostics.capture_fps = diagnostics.captured_count as f64 / elapsed_seconds;
+        diagnostics.output_fps = diagnostics.output_count as f64 / elapsed_seconds;
         diagnostics
     }
 }

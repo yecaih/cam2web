@@ -3,7 +3,7 @@ use crate::pipeline::{
     builtins::HimaxTofMetadata,
     metadata::{FrameMetadata, TofChannel},
 };
-use crate::v4l::{CaptureSpec, Captured};
+use crate::v4l::{CaptureSpec, CapturedFrame};
 use image::{ImageFormat, load_from_memory_with_format};
 
 const WIDTH: u32 = 1280;
@@ -27,7 +27,7 @@ fn spec() -> CaptureSpec {
     }
 }
 
-fn captured(sequence: u32, counter: u16, flag: u8) -> Captured {
+fn captured(sequence: u32, counter: u16, flag: u8) -> CapturedFrame {
     let mut bytes = vec![0xff; (STRIDE_BYTES * (HEIGHT - 1) + WIDTH) as usize];
     let mut rows = bytes.chunks_mut(STRIDE_BYTES as usize);
     for row in rows.by_ref().take((HEIGHT - 1) as usize) {
@@ -50,7 +50,7 @@ fn captured(sequence: u32, counter: u16, flag: u8) -> Captured {
     embedded[12..16].copy_from_slice(&185_658_u32.to_le_bytes());
     embedded[16..32].fill(0x10);
     embedded[32..64].fill(flag);
-    Captured { bytes, sequence }
+    CapturedFrame { bytes, sequence }
 }
 
 #[test]

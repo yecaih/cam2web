@@ -146,8 +146,13 @@ fn video_nodes() -> Result<Vec<VideoNode>> {
         .collect())
 }
 
-fn video_name((_, _, rdev): DeviceIdentity) -> Option<String> {
-    let device = format!("{}:{}", libc::major(rdev), libc::minor(rdev));
+fn video_name(identity: DeviceIdentity) -> Option<String> {
+    let device_number = identity.device_number;
+    let device = format!(
+        "{}:{}",
+        libc::major(device_number),
+        libc::minor(device_number)
+    );
     let name = fs::read_to_string(Path::new("/sys/dev/char").join(device).join("name")).ok()?;
     let name = name.trim();
     (!name.is_empty()).then(|| name.to_owned())
@@ -173,7 +178,12 @@ fn video_paths() -> Result<Vec<PathBuf>> {
     Ok(nodes)
 }
 
-pub(super) type DeviceIdentity = (u64, u64, u64);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct DeviceIdentity {
+    filesystem_device: u64,
+    inode: u64,
+    device_number: u64,
+}
 
 pub(super) fn device_identity(path: &Path) -> io::Result<DeviceIdentity> {
     identity_from_metadata(&fs::metadata(path)?)
@@ -186,7 +196,11 @@ pub(super) fn identity_from_metadata(metadata: &fs::Metadata) -> io::Result<Devi
             "video node is no longer a character device",
         ));
     }
-    Ok((metadata.dev(), metadata.ino(), metadata.rdev()))
+    Ok(DeviceIdentity {
+        filesystem_device: metadata.dev(),
+        inode: metadata.ino(),
+        device_number: metadata.rdev(),
+    })
 }
 
 #[cfg(test)]
@@ -201,7 +215,11 @@ mod tests {
     fn node(number: u64, name: Option<&str>) -> VideoNode {
         VideoNode::new(
             format!("/dev/video{number}").into(),
-            (1, number, number),
+            DeviceIdentity {
+                filesystem_device: 1,
+                inode: number,
+                device_number: number,
+            },
             name.map(str::to_owned),
         )
     }

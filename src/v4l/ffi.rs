@@ -408,12 +408,6 @@ pub(super) fn has_errno(err: &io::Error, codes: &[i32]) -> bool {
     err.raw_os_error().is_some_and(|code| codes.contains(&code))
 }
 
-pub(super) fn is_device_lost(err: &anyhow::Error) -> bool {
-    err.chain()
-        .filter_map(|cause| cause.downcast_ref::<io::Error>())
-        .any(|cause| has_errno(cause, &[libc::ENODEV, libc::ENXIO, libc::EBADF]))
-}
-
 pub(super) fn text(bytes: &[u8]) -> String {
     let end = bytes
         .iter()
