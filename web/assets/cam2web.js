@@ -283,6 +283,25 @@ function tryInteger(value) {
   if (typeof value === 'string' && /^-?\d{1,24}$/.test(value)) return BigInt(value);
   return null;
 }
+function makeWheelAdjuster(input, min, max, step) {
+  if (min === null || max === null || min >= max) return null;
+  const gridStep = step > 0n ? step : 1n;
+  const lastIndex = (max - min) / gridStep;
+  if (lastIndex === 0n) return null;
+  const maxMagnitude = max < 0n ? -max : max;
+  const roundedTicks = (maxMagnitude + 25n * gridStep) / (50n * gridStep);
+  const ticks = roundedTicks > 0n ? roundedTicks : 1n;
+  return direction => {
+    const current = tryInteger(input.value);
+    if (current === null || current < min || current > max || (current - min) % gridStep !== 0n) return false;
+    const index = (current - min) / gridStep + direction * ticks;
+    const clamped = index < 0n ? 0n : index > lastIndex ? lastIndex : index;
+    const next = min + clamped * gridStep;
+    if (current === next) return false;
+    input.value = next.toString();
+    return true;
+  };
+}
 function getIntegerEditor(field, kind) {
   const bounds = [field.min, field.max, field.step];
   if ([...bounds, field.value].some(value => value != null && tryInteger(value) === null)) return null;
@@ -295,6 +314,7 @@ function getIntegerEditor(field, kind) {
   input.maxLength = 25;
   return {
     input,
+    adjustByWheel: kind === 'bitmask' ? null : makeWheelAdjuster(input, min, max, step),
     set: value => { input.value = tryInteger(value)?.toString() ?? ''; },
     get: () => {
       const exact = tryInteger(input.value);
@@ -366,6 +386,17 @@ function getMenuChoices(field) {
     const label = isObject ? entry.name ?? entry.label ?? entry.value : null;
     return [{ value, text: label == null ? null : `${label} (${value})` }];
   });
+}
+function getControlTooltip(field, kind, isBoolean) {
+  if (kind === 'button' || field.has_payload === true) return '';
+  if (isBoolean) return '取值：0（关闭）、1（开启）';
+  const choices = getMenuChoices(field);
+  if (choices.length) return `可选值：${choices.map(({ text, value }) => text ?? value).join('、')}`;
+  const [min, max, step] = [field.min, field.max, field.step].map(tryInteger);
+  if (kind === 'bitmask') return max === null ? '' : `允许的位掩码：0x${max.toString(16)}`;
+  if (min === null || max === null) return '';
+  const unit = field.unit ? ` ${field.unit}` : '';
+  return `取值范围：${min} ～ ${max}${unit}${step > 0n ? `；步长：${step}` : ''}`;
 }
 function canEditField(field) {
   const flags = field.flags;
@@ -447,10 +478,12 @@ class FieldList {
     const isWriteOnly = (Number.isSafeInteger(field.flags) && (field.flags & 64) !== 0) ||
       (Array.isArray(field.flags) && field.flags.some(flag => /^(?:v4l2_ctrl_flag_)?write_?only$/i.test(flag)));
     const line = makeElement('div', undefined, 'field-line');
+    const tooltip = getControlTooltip(field, kind, isBoolean);
+    if (tooltip) line.title = tooltip;
     line.append(makeElement('h3', title));
     section.append(line);
     const editor = target && makeEditor(field, kind, isBoolean);
-    const row = { section, signature, editor, isBoolean, isDirty: false, pendingCount: 0, writeVersion: 0, needsReset: true };
+    const row = { section, signature, editor, isBoolean, isDirty: false, pendingCount: 0, needsReset: true };
     if (editor) this.#addEditor(row, line, target, title, field.unit);
     else if (!isWriteOnly) {
       row.output = makeElement('code', undefined, 'small');
@@ -475,9 +508,15 @@ class FieldList {
     line.append(editorRow);
     row.section.append(error);
 
-    const markDirty = () => { row.isDirty = true; error.textContent = ''; };
+    let wheelTimer;
+    const markDirty = () => {
+      clearTimeout(wheelTimer);
+      row.isDirty = true;
+      error.textContent = '';
+    };
     const commit = async () => {
-      if (input.disabled || !row.isDirty) return;
+      clearTimeout(wheelTimer);
+      if (!input.isConnected || input.disabled || !row.isDirty) return;
       let value;
       try { value = row.editor.get(); }
       catch (failure) { error.textContent = failure.message; return; }
@@ -492,22 +531,24 @@ class FieldList {
       if (!write) return;
       row.isDirty = false;
       row.pendingCount += 1;
-      const version = ++row.writeVersion;
-      error.textContent = '';
-      try { await write; }
-      catch (failure) {
-        if (row.writeVersion === version && !row.isDirty) error.textContent = failure.message;
-      }
-      finally {
-        row.pendingCount -= 1;
-        row.needsReset = true;
-        this.#syncValue(row);
-      }
+      await write.catch(() => {});
+      row.pendingCount -= 1;
+      row.needsReset = true;
+      this.#syncValue(row);
     };
     const changeAndCommit = () => { markDirty(); void commit(); };
     if (!editorInput) input.addEventListener('click', changeAndCommit);
     else if (input.type === 'text') {
       input.addEventListener('input', markDirty);
+      if (row.editor.adjustByWheel) {
+        input.addEventListener('wheel', event => {
+          if (input.disabled || document.activeElement !== input || event.ctrlKey || !event.deltaY) return;
+          event.preventDefault();
+          if (!row.editor.adjustByWheel(event.deltaY < 0 ? 1n : -1n)) return;
+          markDirty();
+          wheelTimer = setTimeout(commit, 180);
+        }, { passive: false });
+      }
       input.addEventListener('blur', () => { void commit(); });
       input.addEventListener('keydown', event => {
         if (event.key !== 'Enter' || event.isComposing) return;
