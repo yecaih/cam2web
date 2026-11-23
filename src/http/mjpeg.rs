@@ -43,10 +43,18 @@ impl Multipart {
             let Some(jpeg) = output.jpeg else {
                 continue;
             };
-            let headers = format!(
-                "--{BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+            let mut headers = format!(
+                "--{BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n",
                 jpeg.len()
             );
+            if let Some(metadata) = output.tof_metadata
+                && let Ok(json) = serde_json::to_string(&metadata)
+            {
+                headers.push_str("X-Cam2web-Tof: ");
+                headers.push_str(&json);
+                headers.push_str("\r\n");
+            }
+            headers.push_str("\r\n");
             self.part = Part::Jpeg(jpeg);
             return Some((Ok(Bytes::from(headers)), self));
         }

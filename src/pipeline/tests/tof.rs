@@ -41,13 +41,15 @@ fn captured(sequence: u32, counter: u16, flag: u8) -> Captured {
         }
     }
     let embedded = rows.next().unwrap();
-    embedded[0] = 0;
+    embedded[0] = 0xab;
     embedded[1] = flag;
     embedded[2..4].copy_from_slice(&counter.to_le_bytes());
     embedded[4..6].copy_from_slice(&[25, 10]);
     embedded[6..8].copy_from_slice(&2025_u16.to_le_bytes());
-    embedded[8..12].copy_from_slice(&[16, 8, 14, 0]);
+    embedded[8..12].copy_from_slice(&[16, 8, 14, 0xcd]);
     embedded[12..16].copy_from_slice(&185_658_u32.to_le_bytes());
+    embedded[16..32].fill(0x10);
+    embedded[32..64].fill(flag);
     Captured { bytes, sequence }
 }
 
@@ -109,6 +111,14 @@ fn pairs_in_both_orders_and_preserves_depth_left_nir_right() {
             pair.depth.capture_sequence,
             if first == 1 { u32::MAX } else { 0 }
         );
+        assert_eq!((pair.depth.frame_flag, pair.nir.frame_flag), (1, 0));
+        assert_eq!(
+            (pair.depth.dummy_byte, pair.depth.padding_byte),
+            (0xab, 0xcd)
+        );
+        assert_eq!(pair.depth.reserved_bytes, [0x10; 16]);
+        assert_eq!(pair.depth.undocumented_bytes, [1; 32]);
+        assert_eq!(pair.nir.undocumented_bytes, [0; 32]);
         let clock = pair.depth.sensor_clock;
         assert_eq!((clock.year, clock.month, clock.day), (2025, 10, 25));
         assert_eq!(

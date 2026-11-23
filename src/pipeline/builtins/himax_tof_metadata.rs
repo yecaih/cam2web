@@ -58,6 +58,11 @@ impl Module for HimaxTofMetadata {
                     hour: embedded[10],
                     microsecond: u32::from_le_bytes(embedded[12..16].try_into()?),
                 },
+                frame_flag: embedded[1],
+                dummy_byte: embedded[0],
+                padding_byte: embedded[11],
+                reserved_bytes: embedded[16..32].try_into()?,
+                undocumented_bytes: embedded[32..64].try_into()?,
             },
         );
         // The rows have the same byte width before and after unpacking the geometry.

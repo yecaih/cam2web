@@ -11,6 +11,11 @@ pub struct TofEmbedded {
     pub capture_sequence: u32,
     pub sensor_frame_count: u16,
     pub sensor_clock: TofSensorClock,
+    pub frame_flag: u8,
+    pub dummy_byte: u8,
+    pub padding_byte: u8,
+    pub reserved_bytes: [u8; 16],
+    pub undocumented_bytes: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

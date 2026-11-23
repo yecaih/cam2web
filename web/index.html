@@ -34,7 +34,16 @@
       </section>
       <section class="metadata panel row between" aria-labelledby="metadata-title">
         <h2 id="metadata-title">Metadata</h2>
-        <span class="small">—</span>
+        <div class="metadata-values small">
+          <span id="metadata-empty">—</span>
+          <span id="metadata-depth" hidden></span>
+          <span id="metadata-nir" hidden></span>
+        </div>
+        <details id="metadata-details" hidden>
+          <summary>原始字段</summary>
+          <code id="metadata-depth-raw"></code>
+          <code id="metadata-nir-raw"></code>
+        </details>
       </section>
 
       <div class="commands">

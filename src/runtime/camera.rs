@@ -256,11 +256,7 @@ impl Camera {
     fn execute(&mut self, command: Command) -> Reply {
         let is_mutation = matches!(
             &command,
-            Command::Select(_)
-                | Command::Start(..)
-                | Command::Stop(_)
-                | Command::Control(..)
-                | Command::Parameter(..)
+            Command::Select(_) | Command::Start(..) | Command::Stop(_) | Command::Parameter(..)
         );
         let result = self.dispatch(command);
         if is_mutation && let Err(Failure::Invalid(error)) = &result {
@@ -315,7 +311,13 @@ impl Camera {
                 let actual = self
                     .require_target(&target)?
                     .device
-                    .set_control(group, id, value);
+                    .set_control(group, id, value)
+                    .inspect_err(|error| {
+                        eprintln!(
+                            "cam2web: control write {} {id:#010x}={value}: {error:#}",
+                            target.node_id
+                        );
+                    });
                 let actual = self.track_device_error(actual)?;
                 Ok(json!({"id": id, "value": actual.map(|value| value.to_string())}))
             }

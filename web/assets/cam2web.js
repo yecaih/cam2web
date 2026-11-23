@@ -102,7 +102,7 @@ class MultipartJpegReader {
       const end = frame.length;
       const hasJpegMarkers = end >= 4 && frame[0] === 0xff && frame[1] === 0xd8 &&
         frame[end - 2] === 0xff && frame[end - 1] === 0xd9;
-      if (hasJpegMarkers) onFrame(frame);
+      if (hasJpegMarkers) onFrame({ jpeg: frame, metadata: this.#readTofMetadata() });
       return;
     }
     if (this.#state === 'boundary') {
@@ -118,6 +118,12 @@ class MultipartJpegReader {
     const name = line.slice(0, colon).trim().toLowerCase();
     if (this.#headers.has(name)) throw new Error('MJPEG part 头部重复');
     this.#headers.set(name, line.slice(colon + 1).trim());
+  }
+  #readTofMetadata() {
+    const source = this.#headers.get('x-cam2web-tof');
+    if (!source) return null;
+    try { return JSON.parse(source); }
+    catch { return null; }
   }
   #beginJpeg() {
     const length = this.#headers.get('content-length');
@@ -139,8 +145,12 @@ class PreviewStream {
   #frame = element('frame');
   #emptyMessage = element('empty-frame');
   #onStale;
+  #onMetadata;
 
-  constructor(onStale) { this.#onStale = onStale; }
+  constructor(onStale, onMetadata) {
+    this.#onStale = onStale;
+    this.#onMetadata = onMetadata;
+  }
   setSession(sessionId) {
     if (!isIdentity(sessionId)) { this.stop(); return; }
     if (this.#subscription?.sessionId === sessionId) return;
@@ -166,6 +176,7 @@ class PreviewStream {
     this.#emptyMessage.hidden = false;
     if (this.#emptyMessage.textContent !== message) this.#emptyMessage.textContent = message;
     this.#setViewer(label, false);
+    this.#onMetadata(null);
   }
   #setViewer(label, isLive) {
     const viewer = element('viewer');
@@ -237,7 +248,8 @@ class PreviewStream {
   async #decodeLatest(subscription, attempt) {
     if (!attempt.pending || attempt.isDecoding || subscription.attempt !== attempt) return;
     attempt.isDecoding = true;
-    const url = URL.createObjectURL(new Blob([attempt.pending], { type: 'image/jpeg' }));
+    const { jpeg, metadata } = attempt.pending;
+    const url = URL.createObjectURL(new Blob([jpeg], { type: 'image/jpeg' }));
     attempt.pending = null;
     attempt.decodeUrl = url;
     try {
@@ -252,6 +264,7 @@ class PreviewStream {
       this.#frame.hidden = false;
       this.#emptyMessage.hidden = true;
       this.#setViewer('收帧中', true);
+      this.#onMetadata(metadata);
       attempt.hasFrame = true;
       this.#setDeadline(attempt);
     } catch {
@@ -433,30 +446,34 @@ class FieldList {
     const isBoolean = isBooleanField(field, kind);
     const isWriteOnly = (Number.isSafeInteger(field.flags) && (field.flags & 64) !== 0) ||
       (Array.isArray(field.flags) && field.flags.some(flag => /^(?:v4l2_ctrl_flag_)?write_?only$/i.test(flag)));
-    const header = makeElement('header', undefined, 'row between');
-    header.append(makeElement('h3', title));
-    section.append(header);
+    const line = makeElement('div', undefined, 'field-line');
+    line.append(makeElement('h3', title));
+    section.append(line);
     const editor = target && makeEditor(field, kind, isBoolean);
     const row = { section, signature, editor, isBoolean, isDirty: false, pendingCount: 0, writeVersion: 0, needsReset: true };
-    if (editor) this.#addEditor(row, target, title, field.unit);
+    if (editor) this.#addEditor(row, line, target, title, field.unit);
     else if (!isWriteOnly) {
       row.output = makeElement('code', undefined, 'small');
-      header.append(row.output);
+      line.append(row.output);
     }
     return row;
   }
-  #addEditor(row, target, title, unit) {
-    const editorRow = makeElement('div', undefined, 'row field-editor');
+  #addEditor(row, line, target, title, unit) {
+    const editorRow = makeElement('div', undefined, 'field-editor');
     const error = makeElement('p', '', 'small error');
     error.setAttribute('role', 'status');
     const editorInput = row.editor.input;
-    const input = editorInput ?? makeElement('button', `触发 ${title}`);
+    const input = editorInput ?? makeElement('button', '触发');
     if (editorInput) input.setAttribute('aria-label', `设置 ${title}${unit == null ? '' : `（${unit}）`}`);
-    else input.type = 'button';
+    else {
+      input.type = 'button';
+      input.setAttribute('aria-label', `触发 ${title}`);
+    }
     row.input = input;
     editorRow.append(input);
     if (unit != null) editorRow.append(makeElement('span', unit, 'small'));
-    row.section.append(editorRow, error);
+    line.append(editorRow);
+    row.section.append(error);
 
     const markDirty = () => { row.isDirty = true; error.textContent = ''; };
     const commit = async () => {
@@ -508,8 +525,51 @@ function previewBlockReason(selection) {
   return '';
 }
 
+function formatSensorClock(clock) {
+  if (!clock?.year || !clock.month || !clock.day) return '—';
+  const pad = (part, digits = 2) => String(part).padStart(digits, '0');
+  return `${pad(clock.year, 4)}-${pad(clock.month)}-${pad(clock.day)} ` +
+    `${pad(clock.hour)}:${pad(clock.minute)}:${pad(clock.second)}.${pad(clock.microsecond, 6)}`;
+}
+
+class TofMetadataView {
+  #pair = null;
+  #details = element('metadata-details');
+  static channels = [['depth', 'Depth'], ['nir', 'NIR']];
+
+  constructor() {
+    this.#details.addEventListener('toggle', () => this.#renderRaw());
+  }
+  render(pair) {
+    if (pair === this.#pair) return;
+    this.#pair = pair;
+    const hasPair = Boolean(pair?.depth && pair?.nir);
+    element('metadata-empty').hidden = hasPair;
+    this.#details.hidden = !hasPair;
+    for (const [channel, title] of TofMetadataView.channels) {
+      const label = element(`metadata-${channel}`);
+      const sample = pair?.[channel];
+      label.hidden = !sample;
+      label.textContent = sample ? `${title} 帧 ${sample.sensor_frame_count} · 采集序号 ${sample.capture_sequence} · ${formatSensorClock(sample.sensor_clock)}` : '';
+    }
+    this.#renderRaw();
+  }
+  #renderRaw() {
+    if (!this.#details.open) return;
+    const hex = value => Number.isInteger(value) ? value.toString(16).padStart(2, '0') : '—';
+    const bytes = values => Array.isArray(values) ? values.map(hex).join(' ') : '—';
+    for (const [channel, title] of TofMetadataView.channels) {
+      const sample = this.#pair?.[channel];
+      element(`metadata-${channel}-raw`).textContent = sample ?
+        `${title} · 标记 0x${hex(sample.frame_flag)} · dummy 0x${hex(sample.dummy_byte)} · 填充 0x${hex(sample.padding_byte)}` +
+        ` · 保留 [16–31] ${bytes(sample.reserved_bytes)} · 未定义 [32–63] ${bytes(sample.undocumented_bytes)}` : '';
+    }
+  }
+}
+
 class Workbench {
-  #stream = new PreviewStream(() => { void this.#refresh(); });
+  #metadata = new TofMetadataView();
+  #stream = new PreviewStream(() => { void this.#refresh(); }, pair => this.#metadata.render(pair));
   #fields = {
     controls: new FieldList('control-rows', payload => this.#queueControlWrite('control', payload)),
     'camera-controls': new FieldList('camera-control-rows', payload => this.#queueControlWrite('camera-control', payload)),
@@ -576,10 +636,11 @@ class Workbench {
         element(route).scrollTop = 0;
       }
     }
+    const sessionId = status.preview?.session_id;
     this.#status = status;
     this.#isFresh = true;
     this.#statusError = '';
-    if (status.preview) this.#stream.setSession(status.preview.session_id);
+    if (isIdentity(sessionId)) this.#stream.setSession(sessionId);
     else this.#stream.stop(status.last_error ? '预览已停止' :
       previewBlockReason(status.selection) || '预览未启动');
     this.#render();
