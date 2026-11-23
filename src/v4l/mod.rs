@@ -7,6 +7,7 @@ mod ffi;
 mod uapi;
 
 use std::fs::{File, OpenOptions};
+use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -15,7 +16,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub use capabilities::Capabilities;
-pub use capture::{CaptureEvent, CaptureSpec, Captured, FormatRequest};
+pub use capture::{CaptureEvent, CaptureSpec, CapturedFrame, FormatRequest};
 pub use controls::ControlGroup;
 pub(crate) use controls::{ControlScan, ControlValueScan, ReadableControl};
 
@@ -35,6 +36,13 @@ impl Fraction {
     fn is_valid(&self) -> bool {
         self.numerator != 0 && self.denominator != 0
     }
+}
+
+pub(crate) fn is_device_lost(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<io::Error>())
+        .any(|cause| ffi::has_errno(cause, &[libc::ENODEV, libc::ENXIO, libc::EBADF]))
 }
 
 pub struct Device {

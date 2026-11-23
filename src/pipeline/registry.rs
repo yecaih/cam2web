@@ -29,23 +29,23 @@ fn build_module<Implementation: Module + DeserializeOwned + 'static>(
     )?))
 }
 
-pub(super) struct NamedModule {
-    pub(super) id: String,
+pub(super) struct ModuleInstance {
+    pub(super) instance_id: String,
     kind: String,
     pub(super) module: Box<dyn Module>,
 }
 
-impl NamedModule {
+impl ModuleInstance {
     pub(super) fn label(&self) -> String {
-        format!("module {:?} ({})", self.id, self.kind)
+        format!("module {:?} ({})", self.instance_id, self.kind)
     }
 }
 
 pub(super) fn assemble(
     config: &PipelineConfig,
     mut format: PixelFormat,
-) -> Result<Vec<NamedModule>> {
-    let mut ids = HashSet::new();
+) -> Result<Vec<ModuleInstance>> {
+    let mut instance_ids = HashSet::new();
     let mut modules = Vec::new();
     let entries = config
         .modules
@@ -55,7 +55,7 @@ pub(super) fn assemble(
     for (config, registry) in entries {
         ensure!(!config.id.trim().is_empty(), "module ID must not be blank");
         ensure!(
-            ids.insert(&config.id),
+            instance_ids.insert(&config.id),
             "duplicate module ID {:?}",
             config.id
         );
@@ -72,19 +72,22 @@ pub(super) fn assemble(
         let module = factory(config).with_context(|| {
             format!("module {:?} ({}): invalid options", config.id, config.kind)
         })?;
-        let named = NamedModule {
-            id: config.id.clone(),
+        let module_instance = ModuleInstance {
+            instance_id: config.id.clone(),
             kind: config.kind.clone(),
             module,
         };
-        format = named.module.output_format(format).with_context(|| {
-            format!(
-                "{}: incompatible input FourCC {}",
-                named.label(),
-                format.fourcc()
-            )
-        })?;
-        modules.push(named);
+        format = module_instance
+            .module
+            .output_format(format)
+            .with_context(|| {
+                format!(
+                    "{}: incompatible input FourCC {}",
+                    module_instance.label(),
+                    format.fourcc()
+                )
+            })?;
+        modules.push(module_instance);
     }
     ensure!(format == PixelFormat::Jpeg, "chain must produce JPEG");
     Ok(modules)

@@ -7,8 +7,8 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::capabilities::{fourcc_text, parse_fourcc};
-use super::ffi::{self, has_errno, is_device_lost};
-use super::{Device, Fraction};
+use super::ffi::{self, has_errno};
+use super::{Device, Fraction, is_device_lost};
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -29,13 +29,13 @@ pub struct CaptureSpec {
     pub interval: Option<Fraction>,
 }
 
-pub struct Captured {
+pub struct CapturedFrame {
     pub bytes: Vec<u8>,
     pub sequence: u32,
 }
 
 pub enum CaptureEvent {
-    Frame(Captured),
+    Frame(CapturedFrame),
     DriverError { sequence: u32 },
     Empty { sequence: u32 },
     Timeout,
@@ -45,7 +45,7 @@ const BUFFER_COUNT: u32 = 4;
 
 #[derive(Default)]
 pub(super) struct CaptureQueue {
-    mappings: Vec<Mapping>,
+    mappings: Vec<MappedBuffer>,
     has_buffers: bool,
     is_streaming: bool,
 }
@@ -75,7 +75,7 @@ impl Device {
         let fourcc = parse_fourcc(&request.fourcc)?;
         self.stop()
             .context("release previous V4L2 stream before starting")?;
-        let raw = ffi::set_format(self.fd(), fourcc, request.width, request.height)
+        let negotiated_format = ffi::set_format(self.fd(), fourcc, request.width, request.height)
             .context("VIDIOC_S_FMT")?;
         let interval = self.negotiate_interval(request.interval.as_ref())?;
         if let Err(err) = self.start_stream() {
@@ -91,46 +91,49 @@ impl Device {
             };
         }
         Ok(CaptureSpec {
-            fourcc: fourcc_text(raw.fourcc),
-            width: raw.width,
-            height: raw.height,
-            stride_bytes: raw.stride_bytes,
-            size_bytes: raw.size_bytes,
+            fourcc: fourcc_text(negotiated_format.fourcc),
+            width: negotiated_format.width,
+            height: negotiated_format.height,
+            stride_bytes: negotiated_format.stride_bytes,
+            size_bytes: negotiated_format.size_bytes,
             interval,
         })
     }
 
     fn negotiate_interval(&self, requested: Option<&Fraction>) -> Result<Option<Fraction>> {
-        let (mut actual, can_set_interval) = match ffi::stream_interval(self.fd(), None) {
-            Ok(interval) => interval,
-            Err(err) if has_errno(&err, &[libc::EINVAL, libc::ENOTTY]) => return Ok(None),
-            Err(err) => return Err(err).context("VIDIOC_G_PARM"),
-        };
+        let (mut negotiated_interval, can_set_interval) =
+            match ffi::stream_interval(self.fd(), None) {
+                Ok(interval) => interval,
+                Err(err) if has_errno(&err, &[libc::EINVAL, libc::ENOTTY]) => return Ok(None),
+                Err(err) => return Err(err).context("VIDIOC_G_PARM"),
+            };
         if let Some(requested) = requested.filter(|_| can_set_interval) {
-            (actual, _) =
+            (negotiated_interval, _) =
                 ffi::stream_interval(self.fd(), Some(requested)).context("VIDIOC_S_PARM")?;
         }
-        Ok(actual.is_valid().then_some(actual))
+        Ok(negotiated_interval
+            .is_valid()
+            .then_some(negotiated_interval))
     }
 
     fn start_stream(&mut self) -> Result<()> {
-        let count =
+        let allocated_buffer_count =
             ffi::request_buffers(self.fd(), BUFFER_COUNT).context("VIDIOC_REQBUFS (MMAP)")?;
-        self.capture.has_buffers = count != 0;
+        self.capture.has_buffers = allocated_buffer_count != 0;
         ensure!(self.capture.has_buffers, "driver allocated no MMAP buffers");
-        for index in 0..count {
-            let mapping = Mapping::map(self.fd(), index)?;
+        for index in 0..allocated_buffer_count {
+            let mapping = MappedBuffer::map(self.fd(), index)?;
             self.capture.mappings.push(mapping);
         }
-        for index in 0..count {
-            self.queue(index)?;
+        for index in 0..allocated_buffer_count {
+            self.enqueue_buffer(index)?;
         }
         ffi::stream(self.fd(), true).context("VIDIOC_STREAMON")?;
         self.capture.is_streaming = true;
         Ok(())
     }
 
-    fn queue(&self, index: u32) -> Result<()> {
+    fn enqueue_buffer(&self, index: u32) -> Result<()> {
         ffi::queue_buffer(self.fd(), index).with_context(|| format!("VIDIOC_QBUF buffer {index}"))
     }
 
@@ -157,7 +160,7 @@ impl Device {
                 return Ok(CaptureEvent::Timeout);
             }
             match ffi::dequeue_buffer(self.fd()) {
-                Ok(raw) => return self.copy_frame_and_requeue(&raw),
+                Ok(dequeued_buffer) => return self.copy_frame_and_requeue(&dequeued_buffer),
                 Err(err) if has_errno(&err, &[libc::EAGAIN]) => (),
                 Err(err) => return Err(err).context("VIDIOC_DQBUF"),
             }
@@ -167,30 +170,35 @@ impl Device {
         }
     }
 
-    fn copy_frame_and_requeue(&self, raw: &ffi::RawFrame) -> Result<CaptureEvent> {
+    fn copy_frame_and_requeue(&self, dequeued_buffer: &ffi::RawFrame) -> Result<CaptureEvent> {
         let mapping = self
             .capture
             .mappings
-            .get(raw.index as usize)
-            .ok_or_else(|| anyhow!("VIDIOC_DQBUF returned invalid buffer index {}", raw.index))?;
-        let frame = if raw.is_error {
+            .get(dequeued_buffer.index as usize)
+            .ok_or_else(|| {
+                anyhow!(
+                    "VIDIOC_DQBUF returned invalid buffer index {}",
+                    dequeued_buffer.index
+                )
+            })?;
+        let capture_result = if dequeued_buffer.is_error {
             Ok(CaptureEvent::DriverError {
-                sequence: raw.sequence,
+                sequence: dequeued_buffer.sequence,
             })
-        } else if raw.used_bytes == 0 {
+        } else if dequeued_buffer.used_bytes == 0 {
             Ok(CaptureEvent::Empty {
-                sequence: raw.sequence,
+                sequence: dequeued_buffer.sequence,
             })
         } else {
-            mapping.copy_bytes(raw.used_bytes).map(|bytes| {
-                CaptureEvent::Frame(Captured {
+            mapping.copy_bytes(dequeued_buffer.used_bytes).map(|bytes| {
+                CaptureEvent::Frame(CapturedFrame {
                     bytes,
-                    sequence: raw.sequence,
+                    sequence: dequeued_buffer.sequence,
                 })
             })
         };
-        self.queue(raw.index)?;
-        frame
+        self.enqueue_buffer(dequeued_buffer.index)?;
+        capture_result
     }
 }
 
@@ -202,12 +210,12 @@ impl Drop for Device {
     }
 }
 
-struct Mapping {
+struct MappedBuffer {
     address: NonNull<u8>,
     len_bytes: usize,
 }
 
-impl Mapping {
+impl MappedBuffer {
     fn map(fd: RawFd, index: u32) -> Result<Self> {
         let (offset_bytes, len_bytes) = ffi::query_buffer(fd, index)
             .with_context(|| format!("VIDIOC_QUERYBUF buffer {index}"))?;
@@ -252,7 +260,7 @@ fn map_offset(offset_bytes: u32) -> Result<libc::off_t> {
     Ok(offset)
 }
 
-impl Drop for Mapping {
+impl Drop for MappedBuffer {
     fn drop(&mut self) {
         unsafe { libc::munmap(self.address.as_ptr().cast(), self.len_bytes) };
     }

@@ -67,30 +67,30 @@ async fn parameters(State(service): State<Service>) -> Response {
 }
 
 #[derive(Deserialize)]
-struct Select {
+struct SelectRequest {
     node_id: String,
 }
 #[derive(Deserialize)]
-struct Start {
+struct StartPreviewRequest {
     #[serde(flatten)]
     target: Target,
     format: Option<FormatRequest>,
 }
 #[derive(Deserialize)]
-struct Intervals {
+struct FrameIntervalsRequest {
     #[serde(flatten)]
     target: Target,
     format: FormatRequest,
 }
 #[derive(Deserialize)]
-struct Control {
+struct SetControlRequest {
     #[serde(flatten)]
     target: Target,
     id: u32,
     value: ControlValue,
 }
 #[derive(Deserialize)]
-struct Parameter {
+struct SetParameterRequest {
     #[serde(flatten)]
     target: PreviewTarget,
     instance_id: String,
@@ -98,45 +98,60 @@ struct Parameter {
     value: Value,
 }
 
-async fn select(State(service): State<Service>, payload: JsonRequest<Select>) -> Response {
-    mutate(&service, payload, |request| {
+async fn select(State(service): State<Service>, payload: JsonRequest<SelectRequest>) -> Response {
+    dispatch_json_command(&service, payload, |request| {
         Command::Select(request.node_id)
     })
     .await
 }
-async fn start(State(service): State<Service>, payload: JsonRequest<Start>) -> Response {
-    mutate(&service, payload, |request| {
+async fn start(
+    State(service): State<Service>,
+    payload: JsonRequest<StartPreviewRequest>,
+) -> Response {
+    dispatch_json_command(&service, payload, |request| {
         Command::Start(request.target, request.format)
     })
     .await
 }
 async fn stop(State(service): State<Service>, payload: JsonRequest<PreviewTarget>) -> Response {
-    mutate(&service, payload, Command::Stop).await
+    dispatch_json_command(&service, payload, Command::Stop).await
 }
-async fn intervals(State(service): State<Service>, payload: JsonRequest<Intervals>) -> Response {
-    mutate(&service, payload, |request| {
+async fn intervals(
+    State(service): State<Service>,
+    payload: JsonRequest<FrameIntervalsRequest>,
+) -> Response {
+    dispatch_json_command(&service, payload, |request| {
         Command::Intervals(request.target, request.format)
     })
     .await
 }
-async fn user_control(State(service): State<Service>, payload: JsonRequest<Control>) -> Response {
+async fn user_control(
+    State(service): State<Service>,
+    payload: JsonRequest<SetControlRequest>,
+) -> Response {
     set_control(&service, payload, ControlGroup::User).await
 }
-async fn camera_control(State(service): State<Service>, payload: JsonRequest<Control>) -> Response {
+async fn camera_control(
+    State(service): State<Service>,
+    payload: JsonRequest<SetControlRequest>,
+) -> Response {
     set_control(&service, payload, ControlGroup::Camera).await
 }
 async fn set_control(
     service: &Service,
-    payload: JsonRequest<Control>,
+    payload: JsonRequest<SetControlRequest>,
     group: ControlGroup,
 ) -> Response {
-    mutate(service, payload, |request| {
+    dispatch_json_command(service, payload, |request| {
         Command::Control(group, request.target, request.id, request.value)
     })
     .await
 }
-async fn parameter(State(service): State<Service>, payload: JsonRequest<Parameter>) -> Response {
-    mutate(&service, payload, |request| {
+async fn parameter(
+    State(service): State<Service>,
+    payload: JsonRequest<SetParameterRequest>,
+) -> Response {
+    dispatch_json_command(&service, payload, |request| {
         Command::Parameter(
             request.target,
             request.instance_id,
@@ -149,7 +164,7 @@ async fn parameter(State(service): State<Service>, payload: JsonRequest<Paramete
 
 type JsonRequest<T> = Result<Json<T>, JsonRejection>;
 
-async fn mutate<T>(
+async fn dispatch_json_command<T>(
     service: &Service,
     payload: JsonRequest<T>,
     command: impl FnOnce(T) -> Command,

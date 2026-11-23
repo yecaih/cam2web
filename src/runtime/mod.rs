@@ -12,7 +12,7 @@ use crate::{
 use anyhow::{Result, anyhow};
 use axum::body::Bytes;
 use camera::Camera;
-use handoff::{WorkSlot, run_processor};
+use handoff::{LatestFrameSlot, run_processor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{sync::Arc, thread};
@@ -93,18 +93,18 @@ impl Service {
     pub fn spawn(profiles: Vec<DeviceProfile>) -> Result<Self> {
         let (commands, requests) = mpsc::channel(16);
         let (publisher, output) = watch::channel(Output::default());
-        let work = Arc::new(WorkSlot::default());
-        let processor = Arc::clone(&work);
-        let frames = publisher.clone();
+        let frame_slot = Arc::new(LatestFrameSlot::default());
+        let processing_slot = Arc::clone(&frame_slot);
+        let processed_frames = publisher.clone();
         thread::Builder::new()
             .name("cam2web-process".into())
-            .spawn(move || run_processor(&processor, &frames))?;
-        let shutdown = Arc::clone(&work);
+            .spawn(move || run_processor(&processing_slot, &processed_frames))?;
+        let shutdown_slot = Arc::clone(&frame_slot);
         if let Err(error) = thread::Builder::new()
             .name("cam2web-capture".into())
-            .spawn(move || Camera::new(profiles, work, publisher).run(requests))
+            .spawn(move || Camera::new(profiles, frame_slot, publisher).run(requests))
         {
-            shutdown.close();
+            shutdown_slot.close();
             return Err(error.into());
         }
         Ok(Self { commands, output })

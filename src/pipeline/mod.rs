@@ -12,7 +12,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-use crate::v4l::{CaptureSpec, Captured};
+use crate::v4l::{CaptureSpec, CapturedFrame};
 
 pub use config::PipelineConfig;
 pub use metadata::TofPairMetadata;
@@ -21,11 +21,11 @@ pub use module::Parameter;
 use metadata::FrameMetadata;
 
 use frame::{Frame, FrameIdentity, Layout, PixelFormat};
-use registry::{NamedModule, assemble};
+use registry::{ModuleInstance, assemble};
 
 struct Stage {
-    named: NamedModule,
-    output: Layout,
+    module_instance: ModuleInstance,
+    output_layout: Layout,
 }
 
 #[derive(Debug)]
@@ -38,18 +38,19 @@ pub struct Processed {
 impl Stage {
     fn process(&mut self, frame: Frame) -> Result<Option<Frame>> {
         let identity = frame.identity;
-        self.named
+        self.module_instance
             .module
-            .process(frame, self.output)
-            .with_context(|| format!("{}: frame {identity:?}", self.named.label()))
+            .process(frame, self.output_layout)
+            .with_context(|| format!("{}: frame {identity:?}", self.module_instance.label()))
     }
 }
 
 pub struct Pipeline {
-    input: Layout,
+    capture_layout: Layout,
     min_capture_bytes: usize,
     max_capture_bytes: usize,
-    stages: Vec<Stage>,
+    transforms: Vec<Stage>,
+    jpeg_encoder: Stage,
 }
 
 impl Pipeline {
@@ -74,25 +75,40 @@ impl Pipeline {
             "negotiated capture layout {input:?} needs {min_capture_bytes} bytes, but sizeimage is {max_capture_bytes}"
         );
         let mut stages = Vec::new();
-        let mut layout = input;
-        for named in assemble(config, input.format)
+        let mut stage_input_layout = input;
+        for module_instance in assemble(config, input.format)
             .with_context(|| format!("invalid chain for negotiated layout {input:?}"))?
         {
-            let output = named.module.output_layout(layout).with_context(|| {
-                format!("{}: incompatible input layout {layout:?}", named.label())
-            })?;
-            stages.push(Stage { named, output });
-            layout = output;
+            let output_layout = module_instance
+                .module
+                .output_layout(stage_input_layout)
+                .with_context(|| {
+                    format!(
+                        "{}: incompatible input layout {stage_input_layout:?}",
+                        module_instance.label()
+                    )
+                })?;
+            stages.push(Stage {
+                module_instance,
+                output_layout,
+            });
+            stage_input_layout = output_layout;
         }
+        let jpeg_encoder = stages.pop().context("missing JPEG output module")?;
         Ok(Self {
-            input,
+            capture_layout: input,
             min_capture_bytes,
             max_capture_bytes,
-            stages,
+            transforms: stages,
+            jpeg_encoder,
         })
     }
 
-    pub fn process(&mut self, session_id: u64, captured: Captured) -> Result<Option<Processed>> {
+    pub fn process(
+        &mut self,
+        session_id: u64,
+        captured: CapturedFrame,
+    ) -> Result<Option<Processed>> {
         Ok(self
             .process_frame(session_id, captured)?
             .map(|(frame, encode_duration)| Processed {
@@ -108,7 +124,7 @@ impl Pipeline {
     fn process_frame(
         &mut self,
         session_id: u64,
-        captured: Captured,
+        captured: CapturedFrame,
     ) -> Result<Option<(Frame, Duration)>> {
         let identity = FrameIdentity {
             session_id,
@@ -123,31 +139,34 @@ impl Pipeline {
         );
         let mut frame = Frame {
             identity,
-            layout: self.input,
+            layout: self.capture_layout,
             plane: captured.bytes,
             metadata: FrameMetadata::None,
         };
-        let (output, transforms) = self
-            .stages
-            .split_last_mut()
-            .context("missing JPEG output module")?;
-        for stage in transforms {
-            let Some(next) = stage.process(frame)? else {
+        for transform in &mut self.transforms {
+            let Some(transformed_frame) = transform.process(frame)? else {
                 return Ok(None);
             };
-            frame = next;
+            frame = transformed_frame;
         }
-        let started = Instant::now();
-        let jpeg = output
+        let encode_started_at = Instant::now();
+        let jpeg = self
+            .jpeg_encoder
             .process(frame)?
             .context("JPEG encoder returned no output")?;
-        Ok(Some((jpeg, started.elapsed())))
+        Ok(Some((jpeg, encode_started_at.elapsed())))
     }
 
     pub fn parameters(&self) -> Vec<Parameter> {
-        self.stages
+        self.transforms
             .iter()
-            .flat_map(|stage| stage.named.module.parameters(&stage.named.id))
+            .chain(std::iter::once(&self.jpeg_encoder))
+            .flat_map(|stage| {
+                stage
+                    .module_instance
+                    .module
+                    .parameters(&stage.module_instance.instance_id)
+            })
             .collect()
     }
 
@@ -157,15 +176,16 @@ impl Pipeline {
         parameter_id: &str,
         value: Value,
     ) -> Result<()> {
-        let stage = self
-            .stages
+        let module_instance = self
+            .transforms
             .iter_mut()
-            .find(|stage| stage.named.id == instance_id)
+            .chain(std::iter::once(&mut self.jpeg_encoder))
+            .map(|stage| &mut stage.module_instance)
+            .find(|module_instance| module_instance.instance_id == instance_id)
             .with_context(|| format!("unknown module instance {instance_id:?}"))?;
-        stage
-            .named
+        module_instance
             .module
             .set_parameter(parameter_id, value)
-            .with_context(|| stage.named.label())
+            .with_context(|| module_instance.label())
     }
 }
