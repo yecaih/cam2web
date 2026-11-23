@@ -1,4 +1,4 @@
-listen = "0.0.0.0:8766"
+listen = "0.0.0.0:8765"
 
 [[devices]]
 name = "himax_rgb"
