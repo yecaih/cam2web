@@ -20,13 +20,8 @@ cargo run --release -- config/orin.toml
 
 ## 交叉编译
 
-以 Linux ARM64 为例，先准备 ARM64 GNU 链接工具链（含目标系统库），再运行：
-
+使用 musl 库，默认静态编译
 ```sh
-rustup target add aarch64-unknown-linux-gnu
-
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-cargo build --release --target aarch64-unknown-linux-gnu
+rustup target add aarch64-unknown-linux-musl
+cargo build --release --target aarch64-unknown-linux-musl
 ```
-
-产物在 `target/aarch64-unknown-linux-gnu/release/cam2web`。V4L2 使用仓库内的预生成 Rust 接口，构建时不需要 V4L2 头文件或 C shim。
