@@ -11,12 +11,23 @@ use super::{
 };
 const DEPTH_LEVEL_COUNT: usize = 1 << 14;
 const NIR_LEVEL_COUNT: usize = 1 << 12;
+const HALF_ROW_BYTES: usize = SENSOR_WIDTH as usize;
+const BLANK_ROW: [u8; HALF_ROW_BYTES] = [0; HALF_ROW_BYTES];
 
 struct Half {
     session_id: u64,
     channel: TofChannel,
     embedded: TofEmbedded,
     pixels: Vec<u8>,
+}
+
+impl Half {
+    fn is_pair_with(&self, next: &Self) -> bool {
+        self.channel != next.channel
+            && self.session_id == next.session_id
+            && self.embedded.capture_sequence.wrapping_add(1) == next.embedded.capture_sequence
+            && self.embedded.sensor_frame_count.wrapping_add(1) == next.embedded.sensor_frame_count
+    }
 }
 
 #[derive(Deserialize)]
@@ -51,7 +62,6 @@ impl Module for HimaxTofPair {
     }
 
     fn process(&mut self, mut frame: Frame, output: Layout) -> Result<Option<Frame>> {
-        let previous = self.pending.take();
         let FrameMetadata::TofSample(channel, embedded) = frame.metadata else {
             bail!("missing parsed Himax ToF metadata");
         };
@@ -61,35 +71,46 @@ impl Module for HimaxTofPair {
             embedded,
             pixels: self.render(&frame, channel),
         };
-        let Some(previous) = previous.filter(|previous| {
-            previous.channel != current.channel
-                && previous.session_id == current.session_id
-                && previous.embedded.capture_sequence.wrapping_add(1) == embedded.capture_sequence
-                && previous.embedded.sensor_frame_count.wrapping_add(1)
-                    == embedded.sensor_frame_count
-        }) else {
+        let Some(previous) = self.pending.take() else {
             self.pending = Some(current);
             return Ok(None);
         };
-        let (depth, nir) = match current.channel {
-            TofChannel::Depth => (current, previous),
-            TofChannel::Nir => (previous, current),
+        // 传感器可能只出单通道，也可能丢帧；配不上时上一半单独成像，缺失的一侧补黑。
+        let (depth, nir) = if previous.is_pair_with(&current) {
+            match current.channel {
+                TofChannel::Depth => (Some(current), Some(previous)),
+                TofChannel::Nir => (Some(previous), Some(current)),
+            }
+        } else {
+            self.pending = Some(current);
+            match previous.channel {
+                TofChannel::Depth => (Some(previous), None),
+                TofChannel::Nir => (None, Some(previous)),
+            }
         };
-        let mut stitched = allocate_plane(output)?;
-        for (left, right) in depth
-            .pixels
-            .chunks_exact(SENSOR_WIDTH as usize)
-            .zip(nir.pixels.chunks_exact(SENSOR_WIDTH as usize))
-        {
-            stitched.extend_from_slice(left);
-            stitched.extend_from_slice(right);
-        }
         frame.metadata = FrameMetadata::TofPair(TofPairMetadata {
-            depth: depth.embedded,
-            nir: nir.embedded,
+            depth: depth.as_ref().map(|half| half.embedded),
+            nir: nir.as_ref().map(|half| half.embedded),
         });
+        let stitched = stitch(output, depth.as_ref(), nir.as_ref())?;
         Ok(Some(frame.into_with_plane(output, stitched)))
     }
+}
+
+/// depth 在左、nir 在右；缺失的一侧补黑，输出几何始终是 1280×480。
+fn stitch(output: Layout, depth: Option<&Half>, nir: Option<&Half>) -> Result<Vec<u8>> {
+    let mut stitched = allocate_plane(output)?;
+    for row_index in 0..SENSOR_HEIGHT as usize {
+        stitched.extend_from_slice(half_row(depth, row_index));
+        stitched.extend_from_slice(half_row(nir, row_index));
+    }
+    Ok(stitched)
+}
+
+fn half_row(half: Option<&Half>, row_index: usize) -> &[u8] {
+    half.map_or(&BLANK_ROW, |half| {
+        &half.pixels[row_index * HALF_ROW_BYTES..(row_index + 1) * HALF_ROW_BYTES]
+    })
 }
 
 impl HimaxTofPair {

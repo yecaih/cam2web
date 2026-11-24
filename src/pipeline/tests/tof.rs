@@ -53,6 +53,12 @@ fn captured(sequence: u32, counter: u16, flag: u8) -> CapturedFrame {
     CapturedFrame { bytes, sequence }
 }
 
+fn decode(jpeg: &[u8]) -> image::GrayImage {
+    load_from_memory_with_format(jpeg, ImageFormat::Jpeg)
+        .unwrap()
+        .to_luma8()
+}
+
 #[test]
 fn metadata_stage_exposes_the_sensor_geometry_and_excludes_the_embedded_line() {
     let mut parser = HimaxTofMetadata {};
@@ -99,35 +105,31 @@ fn pairs_in_both_orders_and_preserves_depth_left_nir_right() {
             .unwrap()
             .unwrap();
         let pair = processed.tof_metadata.unwrap();
+        let (depth, nir) = (pair.depth.unwrap(), pair.nir.unwrap());
         assert_eq!(
-            pair.depth.sensor_frame_count,
+            depth.sensor_frame_count,
             if first == 1 { u16::MAX } else { 0 }
         );
         assert_eq!(
-            pair.nir.sensor_frame_count,
+            nir.sensor_frame_count,
             if first == 0 { u16::MAX } else { 0 }
         );
         assert_eq!(
-            pair.depth.capture_sequence,
+            depth.capture_sequence,
             if first == 1 { u32::MAX } else { 0 }
         );
-        assert_eq!((pair.depth.frame_flag, pair.nir.frame_flag), (1, 0));
-        assert_eq!(
-            (pair.depth.dummy_byte, pair.depth.padding_byte),
-            (0xab, 0xcd)
-        );
-        assert_eq!(pair.depth.reserved_bytes, [0x10; 16]);
-        assert_eq!(pair.depth.undocumented_bytes, [1; 32]);
-        assert_eq!(pair.nir.undocumented_bytes, [0; 32]);
-        let clock = pair.depth.sensor_clock;
+        assert_eq!((depth.frame_flag, nir.frame_flag), (1, 0));
+        assert_eq!((depth.dummy_byte, depth.padding_byte), (0xab, 0xcd));
+        assert_eq!(depth.reserved_bytes, [0x10; 16]);
+        assert_eq!(depth.undocumented_bytes, [1; 32]);
+        assert_eq!(nir.undocumented_bytes, [0; 32]);
+        let clock = depth.sensor_clock;
         assert_eq!((clock.year, clock.month, clock.day), (2025, 10, 25));
         assert_eq!(
             (clock.hour, clock.minute, clock.second, clock.microsecond),
             (14, 8, 16, 185_658)
         );
-        let decoded = load_from_memory_with_format(&processed.jpeg, ImageFormat::Jpeg)
-            .unwrap()
-            .to_luma8();
+        let decoded = decode(&processed.jpeg);
         assert_eq!(decoded.dimensions(), (1280, 480));
         for y in [20, 470] {
             assert!(decoded.get_pixel(20, y)[0] < 4);
@@ -138,23 +140,60 @@ fn pairs_in_both_orders_and_preserves_depth_left_nir_right() {
 }
 
 #[test]
-fn drops_unpaired_halves_on_gaps_and_session_changes() {
-    let mut pipeline = Pipeline::build(&tof_chain(), &spec()).unwrap();
-    for (session, sequence, counter, flag) in [
-        (1, 1, 1, 0),
-        (1, 3, 2, 1), // userspace skipped a V4L2 buffer
-        (1, 4, 4, 0), // sensor reported a skipped frame
-        (2, 5, 5, 1), // session changed
-        (2, 6, 6, 1), // repeated depth, keep only the latest
-    ] {
-        assert!(
-            pipeline
-                .process(session, captured(sequence, counter, flag))
+fn renders_single_channel_sensors_with_a_blank_half() {
+    // 单通道 depth 用百分位归一化（亮部 255），单通道 nir 用对数 LUT（满量程 170）。
+    for (flag, blank_x, lit_x, lit_level) in [(1u8, 1000, 600, 255), (0, 20, 1000, 170)] {
+        let mut pipeline = Pipeline::build(&tof_chain(), &spec()).unwrap();
+        assert!(pipeline.process(1, captured(0, 0, flag)).unwrap().is_none());
+        for sequence in 1..3 {
+            let processed = pipeline
+                .process(
+                    1,
+                    captured(sequence, u16::try_from(sequence).unwrap(), flag),
+                )
                 .unwrap()
-                .is_none()
-        );
+                .unwrap();
+            let pair = processed.tof_metadata.unwrap();
+            assert_eq!(pair.depth.is_some(), flag == 1);
+            assert_eq!(pair.nir.is_some(), flag == 0);
+            let decoded = decode(&processed.jpeg);
+            assert_eq!(decoded.dimensions(), (1280, 480));
+            assert!(decoded.get_pixel(blank_x, 20)[0] < 4);
+            assert!(decoded.get_pixel(lit_x, 20)[0].abs_diff(lit_level) < 4);
+        }
     }
-    assert!(pipeline.process(2, captured(7, 7, 0)).unwrap().is_some());
+}
+
+#[test]
+fn renders_unpaired_halves_instead_of_dropping_them() {
+    let mut pipeline = Pipeline::build(&tof_chain(), &spec()).unwrap();
+    assert!(pipeline.process(1, captured(1, 1, 0)).unwrap().is_none());
+    for (session, sequence, counter, flag, has_depth) in [
+        (1, 3, 2, 1, false), // 用户态漏了一个 V4L2 buffer
+        (1, 4, 4, 0, true),  // 传感器跳了一帧
+        (2, 5, 5, 1, false), // 换了采集会话
+        (2, 6, 6, 1, true),  // 同一通道连出两帧
+    ] {
+        let processed = pipeline
+            .process(session, captured(sequence, counter, flag))
+            .unwrap()
+            .unwrap();
+        let pair = processed.tof_metadata.unwrap();
+        assert_eq!(
+            (pair.depth.is_some(), pair.nir.is_some()),
+            (has_depth, !has_depth)
+        );
+        let decoded = decode(&processed.jpeg);
+        assert_eq!(decoded.dimensions(), (1280, 480));
+        assert!(decoded.get_pixel(if has_depth { 1000 } else { 20 }, 20)[0] < 4);
+    }
+    let pair = pipeline
+        .process(2, captured(7, 7, 0))
+        .unwrap()
+        .unwrap()
+        .tof_metadata
+        .unwrap();
+    assert!(pair.depth.is_some() && pair.nir.is_some());
 }
 
 #[test]

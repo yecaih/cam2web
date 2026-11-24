@@ -584,14 +584,14 @@ class TofMetadataView {
   render(pair) {
     if (pair === this.#pair) return;
     this.#pair = pair;
-    const hasPair = Boolean(pair?.depth && pair?.nir);
-    element('metadata-empty').hidden = hasPair;
-    this.#details.hidden = !hasPair;
+    const hasSample = Boolean(pair?.depth || pair?.nir);
+    element('metadata-empty').hidden = hasSample;
+    this.#details.hidden = !hasSample;
     for (const [channel, title] of TofMetadataView.channels) {
       const label = element(`metadata-${channel}`);
       const sample = pair?.[channel];
-      label.hidden = !sample;
-      label.textContent = sample ? `${title} 帧 ${sample.sensor_frame_count} · 采集序号 ${sample.capture_sequence} · ${formatSensorClock(sample.sensor_clock)}` : '';
+      label.hidden = !sample && !hasSample;
+      label.textContent = sample ? `${title} 帧 ${sample.sensor_frame_count} · 采集序号 ${sample.capture_sequence} · ${formatSensorClock(sample.sensor_clock)}` : `${title} 缺席 · 半幅补黑`;
     }
     this.#renderRaw();
   }

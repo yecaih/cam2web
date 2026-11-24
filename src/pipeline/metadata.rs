@@ -31,8 +31,9 @@ pub struct TofSensorClock {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct TofPairMetadata {
-    pub depth: TofEmbedded,
-    pub nir: TofEmbedded,
+    /// 单通道传感器（只出 depth 或只出 nir）时，缺失的一侧为 None 并补黑。
+    pub depth: Option<TofEmbedded>,
+    pub nir: Option<TofEmbedded>,
 }
 
 #[derive(Default)]
