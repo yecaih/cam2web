@@ -302,6 +302,21 @@ function makeWheelAdjuster(input, min, max, step) {
     return true;
   };
 }
+function makeIntegerClamper(input, min, max, kind) {
+  if (min === null && max === null) return null;
+  const clampTo = value => { input.value = value.toString(); return true; };
+  return () => {
+    const exact = tryInteger(input.value);
+    if (exact === null) return false;
+    if (kind === 'bitmask') {
+      const allowed = max ?? (1n << 32n) - 1n;
+      return (exact & allowed) === exact ? false : clampTo(exact & allowed);
+    }
+    if (min !== null && exact < min) return clampTo(min);
+    if (max !== null && exact > max) return clampTo(max);
+    return false;
+  };
+}
 function getIntegerEditor(field, kind) {
   const bounds = [field.min, field.max, field.step];
   if ([...bounds, field.value].some(value => value != null && tryInteger(value) === null)) return null;
@@ -315,6 +330,7 @@ function getIntegerEditor(field, kind) {
   return {
     input,
     adjustByWheel: kind === 'bitmask' ? null : makeWheelAdjuster(input, min, max, step),
+    clampInPlace: makeIntegerClamper(input, min, max, kind),
     set: value => { input.value = tryInteger(value)?.toString() ?? ''; },
     get: () => {
       const exact = tryInteger(input.value);
@@ -539,7 +555,10 @@ class FieldList {
     const changeAndCommit = () => { markDirty(); void commit(); };
     if (!editorInput) input.addEventListener('click', changeAndCommit);
     else if (input.type === 'text') {
-      input.addEventListener('input', markDirty);
+      input.addEventListener('input', () => {
+        row.editor.clampInPlace?.();
+        markDirty();
+      });
       if (row.editor.adjustByWheel) {
         input.addEventListener('wheel', event => {
           if (input.disabled || document.activeElement !== input || event.ctrlKey || !event.deltaY) return;
