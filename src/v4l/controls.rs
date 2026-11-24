@@ -2,6 +2,7 @@ use std::{io, os::fd::RawFd};
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
+use tokio::sync::oneshot::{self, error::TryRecvError};
 
 use super::ffi::{self, RawMenu, has_errno, text};
 use super::{Device, is_device_lost};
@@ -79,6 +80,8 @@ pub struct Control {
     pub elem_size: u32,
     pub elems: u32,
     pub dims: Vec<u32>,
+    #[serde(skip)]
+    source: ControlSource,
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -168,10 +171,31 @@ fn enumerate_controls(fd: RawFd, group: ControlGroup) -> Result<Vec<ffi::RawCont
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ControlSource {
+    Video,
+    Sensor,
+}
+
+fn take_result<T>(pending: &mut Option<oneshot::Receiver<Result<T>>>) -> Result<Option<T>> {
+    let Some(receiver) = pending else {
+        return Ok(None);
+    };
+    match receiver.try_recv() {
+        Ok(result) => {
+            *pending = None;
+            result.map(Some)
+        }
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(error) => Err(error).context("sensor control worker stopped"),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ReadableControl {
     pub(crate) id: u32,
     type_id: u32,
+    source: ControlSource,
 }
 
 impl Control {
@@ -179,6 +203,7 @@ impl Control {
         self.can_read.then_some(ReadableControl {
             id: self.id,
             type_id: self.type_id,
+            source: self.source,
         })
     }
 }
@@ -192,6 +217,7 @@ pub(crate) struct ControlReading {
 pub(crate) struct ControlValueScan {
     remaining: std::vec::IntoIter<ReadableControl>,
     readings: Vec<ControlReading>,
+    pending: Option<oneshot::Receiver<Result<ControlReading>>>,
 }
 
 impl ControlValueScan {
@@ -199,15 +225,30 @@ impl ControlValueScan {
         Self {
             readings: Vec::with_capacity(controls.len()),
             remaining: controls.into_iter(),
+            pending: None,
         }
     }
 
     pub(crate) fn step(&mut self, device: &Device) -> Result<Option<Vec<ControlReading>>> {
-        if let Some(control) = self.remaining.next() {
-            self.readings.push(ControlReading {
-                id: control.id,
-                value: device.read_scalar(control)?,
-            });
+        if self.pending.is_some() {
+            let Some(reading) = take_result(&mut self.pending)? else {
+                return Ok(None);
+            };
+            self.readings.push(reading);
+        } else if let Some(control) = self.remaining.next() {
+            let read = move |fd| {
+                Ok(ControlReading {
+                    id: control.id,
+                    value: Device::read_scalar(fd, control)?,
+                })
+            };
+            match control.source {
+                ControlSource::Video => self.readings.push(read(device.fd())?),
+                ControlSource::Sensor => {
+                    self.pending = Some(device.sensor()?.submit(read)?);
+                    return Ok(None);
+                }
+            }
         }
         Ok(self
             .remaining
@@ -218,14 +259,28 @@ impl ControlValueScan {
 }
 
 pub(crate) struct ControlScan {
-    descriptors: std::vec::IntoIter<ffi::RawControl>,
+    descriptors: std::vec::IntoIter<(ffi::RawControl, ControlSource)>,
     controls: Vec<Control>,
+    pending: Option<oneshot::Receiver<Result<Control>>>,
 }
 
 impl ControlScan {
     pub(crate) fn step(&mut self, device: &Device) -> Result<Option<Vec<Control>>> {
-        if let Some(raw) = self.descriptors.next() {
-            self.controls.push(device.read_control(&raw)?);
+        if self.pending.is_some() {
+            let Some(control) = take_result(&mut self.pending)? else {
+                return Ok(None);
+            };
+            self.controls.push(control);
+        } else if let Some((raw, source)) = self.descriptors.next() {
+            let has_buffers = device.capture.has_buffers();
+            let read = move |fd| Device::read_control(fd, &raw, source, has_buffers);
+            match source {
+                ControlSource::Video => self.controls.push(read(device.fd())?),
+                ControlSource::Sensor => {
+                    self.pending = Some(device.sensor()?.submit(read)?);
+                    return Ok(None);
+                }
+            }
         }
         Ok(self
             .descriptors
@@ -237,15 +292,31 @@ impl ControlScan {
 
 impl Device {
     pub(crate) fn scan_controls(&self, group: ControlGroup) -> Result<ControlScan> {
-        let descriptors = enumerate_controls(self.fd(), group)?;
+        let mut descriptors: std::collections::BTreeMap<_, _> =
+            enumerate_controls(self.fd(), group)?
+                .into_iter()
+                .map(|raw| (raw.id, (raw, ControlSource::Video)))
+                .collect();
+        if let Some(sensor) = &self.sensor {
+            for raw in enumerate_controls(sensor.fd(), group)? {
+                descriptors.insert(raw.id, (raw, ControlSource::Sensor));
+            }
+        }
         Ok(ControlScan {
             controls: Vec::with_capacity(descriptors.len()),
-            descriptors: descriptors.into_iter(),
+            descriptors: descriptors.into_values().collect::<Vec<_>>().into_iter(),
+            pending: None,
         })
     }
 
-    fn read_scalar(&self, control: ReadableControl) -> Result<Option<i64>> {
-        match ffi::scalar_control(self.fd(), control.id, control.type_id, None) {
+    fn sensor(&self) -> Result<&super::sensor::SensorControls> {
+        self.sensor
+            .as_ref()
+            .context("sensor control node unavailable")
+    }
+
+    fn read_scalar(fd: RawFd, control: ReadableControl) -> Result<Option<i64>> {
+        match ffi::scalar_control(fd, control.id, control.type_id, None) {
             Ok(value) => Ok(Some(value)),
             Err(error) => {
                 let error = anyhow::Error::new(error);
@@ -258,13 +329,22 @@ impl Device {
         }
     }
 
-    fn read_control(&self, raw: &ffi::RawControl) -> Result<Control> {
+    fn read_control(
+        fd: RawFd,
+        raw: &ffi::RawControl,
+        source: ControlSource,
+        has_buffers: bool,
+    ) -> Result<Control> {
         let can_read = raw.can_read();
         let value = if can_read {
-            self.read_scalar(ReadableControl {
-                id: raw.id,
-                type_id: raw.type_id,
-            })?
+            Self::read_scalar(
+                fd,
+                ReadableControl {
+                    id: raw.id,
+                    type_id: raw.type_id,
+                    source,
+                },
+            )?
         } else {
             None
         };
@@ -279,27 +359,28 @@ impl Device {
             default: raw.default_value,
             value,
             flags: raw.flags,
-            menu: self.list_menu(raw)?,
+            menu: Self::list_menu(fd, raw)?,
             can_read,
-            can_write: self.can_write_control(raw),
+            can_write: Self::can_write_control(raw, has_buffers),
             is_volatile: raw.flags & CTRL_VOLATILE != 0,
             has_payload: raw.has_payload(),
             elem_size: raw.elem_size,
             elems: raw.elems,
             dims: raw.dims[..(raw.nr_of_dims as usize).min(raw.dims.len())].to_vec(),
+            source,
         })
     }
 
-    fn menu_item(&self, raw: &ffi::RawControl, index: u32) -> io::Result<MenuItem> {
+    fn menu_item(fd: RawFd, raw: &ffi::RawControl, index: u32) -> io::Result<MenuItem> {
         let is_integer = matches!(raw.kind(), ControlKind::IntegerMenu);
-        let (name, value) = match ffi::query_menu(self.fd(), raw.id, index, is_integer)? {
+        let (name, value) = match ffi::query_menu(fd, raw.id, index, is_integer)? {
             RawMenu::Name(name) => (Some(text(&name)), None),
             RawMenu::Value(value) => (None, Some(value)),
         };
         Ok(MenuItem { index, name, value })
     }
 
-    fn list_menu(&self, raw: &ffi::RawControl) -> Result<Vec<MenuItem>> {
+    fn list_menu(fd: RawFd, raw: &ffi::RawControl) -> Result<Vec<MenuItem>> {
         if !matches!(raw.kind(), ControlKind::Menu | ControlKind::IntegerMenu)
             || raw.flags & CTRL_DISABLED != 0
         {
@@ -307,7 +388,7 @@ impl Device {
         }
         let mut items = Vec::new();
         for index in u32::try_from(raw.min)?..=u32::try_from(raw.max)? {
-            match self.menu_item(raw, index) {
+            match Self::menu_item(fd, raw, index) {
                 Ok(item) => items.push(item),
                 Err(err) if has_errno(&err, &[libc::EINVAL]) => (),
                 Err(err) => {
@@ -319,8 +400,8 @@ impl Device {
         Ok(items)
     }
 
-    fn scalar_control(&self, raw: &ffi::RawControl, value: Option<i64>) -> Result<i64> {
-        ffi::scalar_control(self.fd(), raw.id, raw.type_id, value).with_context(|| {
+    fn scalar_control(fd: RawFd, raw: &ffi::RawControl, value: Option<i64>) -> Result<i64> {
+        ffi::scalar_control(fd, raw.id, raw.type_id, value).with_context(|| {
             let operation = if value.is_some() {
                 "VIDIOC_S_EXT_CTRLS"
             } else {
@@ -330,8 +411,22 @@ impl Device {
         })
     }
 
-    fn can_write_control(&self, raw: &ffi::RawControl) -> bool {
-        raw.can_write() && !(self.capture.has_buffers() && raw.flags & CTRL_MODIFY_LAYOUT != 0)
+    fn can_write_control(raw: &ffi::RawControl, has_buffers: bool) -> bool {
+        raw.can_write() && !(has_buffers && raw.flags & CTRL_MODIFY_LAYOUT != 0)
+    }
+
+    fn query_writable_control(&self, id: u32) -> io::Result<(RawFd, ffi::RawControl)> {
+        if let Some(sensor) = &self.sensor {
+            let fd = sensor.fd();
+            match ffi::query_control(fd, id, false) {
+                Ok(raw) if raw.flags & CTRL_DISABLED == 0 => return Ok((fd, raw)),
+                Ok(_) => (),
+                Err(error) if has_errno(&error, &[libc::EINVAL, libc::ENOTTY]) => (),
+                Err(error) => return Err(error),
+            }
+        }
+        let fd = self.fd();
+        ffi::query_control(fd, id, false).map(|raw| (fd, raw))
     }
 
     pub fn set_control(&self, group: ControlGroup, id: u32, value: i64) -> Result<Option<i64>> {
@@ -340,14 +435,15 @@ impl Device {
             group.includes(id),
             "control {id:#x} is not in the requested V4L2 control class"
         );
-        let raw = ffi::query_control(self.fd(), id, false)
+        let (fd, raw) = self
+            .query_writable_control(id)
             .with_context(|| format!("VIDIOC_QUERY_EXT_CTRL {id:#x}"))?;
         ensure!(
             raw.id == id,
             "driver returned the wrong control ID for {id:#x}"
         );
         ensure!(
-            self.can_write_control(&raw),
+            Self::can_write_control(&raw, self.capture.has_buffers()),
             "control {id:#x} is not a writable scalar in the current state (flags {:#x})",
             raw.flags
         );
@@ -371,19 +467,18 @@ impl Device {
                     i32::try_from(value).context("V4L2 scalar must fit i32")?;
                 }
                 if matches!(kind, ControlKind::Menu | ControlKind::IntegerMenu) {
-                    self.menu_item(&raw, u32::try_from(value)?)
-                        .with_context(|| {
-                            format!("unavailable menu index {value} for control {id:#x}")
-                        })?;
+                    Self::menu_item(fd, &raw, u32::try_from(value)?).with_context(|| {
+                        format!("unavailable menu index {value} for control {id:#x}")
+                    })?;
                 }
                 value
             }
         };
-        self.scalar_control(&raw, Some(value))?;
+        Self::scalar_control(fd, &raw, Some(value))?;
         if !raw.can_read() {
             return Ok(None);
         }
-        let refreshed = ffi::query_control(self.fd(), id, false).with_context(|| {
+        let refreshed = ffi::query_control(fd, id, false).with_context(|| {
             format!("control {id:#x} written; failed to refresh its descriptor")
         })?;
         ensure!(
@@ -393,7 +488,7 @@ impl Device {
         if !refreshed.can_read() {
             return Ok(None);
         }
-        self.scalar_control(&refreshed, None)
+        Self::scalar_control(fd, &refreshed, None)
             .map(Some)
             .with_context(|| format!("control {id:#x} written; failed to read back its value"))
     }

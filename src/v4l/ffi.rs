@@ -7,13 +7,13 @@ use linux_raw_sys::{
 
 use super::{Fraction, uapi::*};
 
-struct Request<Payload> {
+pub(super) struct Request<Payload> {
     number: u32,
     payload: PhantomData<fn(&mut Payload)>,
 }
 
 impl<Payload> Request<Payload> {
-    const fn new(number: u32) -> Self {
+    pub(super) const fn new(number: u32) -> Self {
         assert!(((number >> _IOC_SIZESHIFT) & _IOC_SIZEMASK) as usize == size_of::<Payload>());
         Self {
             number,
@@ -21,7 +21,7 @@ impl<Payload> Request<Payload> {
         }
     }
 
-    fn call(&self, fd: RawFd, payload: &mut Payload) -> io::Result<()> {
+    pub(super) fn call(&self, fd: RawFd, payload: &mut Payload) -> io::Result<()> {
         loop {
             // Each request is paired with its UAPI type; scalar extended controls
             // also keep the pointed-to control alive until the synchronous ioctl returns.

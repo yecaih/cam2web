@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, watch};
 
@@ -106,6 +106,9 @@ impl Camera {
                 self.handle_request(request);
             } else {
                 self.step_control_scan();
+                if self.session.is_none() && self.pending_control_scan.is_some() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
             }
             self.poll_frame();
         }
@@ -271,7 +274,7 @@ impl Camera {
         self.selection = None;
         stopped?;
         let identity = device_identity(&path)?;
-        let device = Device::open(&path)?;
+        let mut device = Device::open(&path)?;
         anyhow::ensure!(
             identity == identity_from_metadata(&device.metadata()?)?,
             "video node changed while opening"
@@ -281,6 +284,7 @@ impl Camera {
             Err(error) => (None, Some(format!("{error:#}"))),
         };
         let capabilities = device.capabilities()?;
+        device.discover_sensor_controls(&path);
         anyhow::ensure!(
             identity == device_identity(&path)?,
             "video node changed during selection"

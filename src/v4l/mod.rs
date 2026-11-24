@@ -2,6 +2,8 @@ mod capabilities;
 mod capture;
 mod controls;
 mod ffi;
+mod media;
+mod sensor;
 #[allow(dead_code, non_camel_case_types, clippy::all)]
 #[path = "uapi/bindings.rs"]
 mod uapi;
@@ -49,6 +51,7 @@ pub struct Device {
     file: File,
     caps: ffi::RawCaps,
     capture: capture::CaptureQueue,
+    sensor: Option<sensor::SensorControls>,
 }
 
 impl Device {
@@ -57,22 +60,49 @@ impl Device {
     }
 
     pub fn open(path: &Path) -> Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(path)
-            .with_context(|| format!("open {}", path.display()))?;
+        let file = open_node(path).with_context(|| format!("open {}", path.display()))?;
         let caps = ffi::query_caps(file.as_raw_fd())
             .with_context(|| format!("VIDIOC_QUERYCAP on {}", path.display()))?;
         Ok(Self {
             file,
             caps,
             capture: capture::CaptureQueue::default(),
+            sensor: None,
         })
+    }
+
+    pub(crate) fn discover_sensor_controls(&mut self, video_path: &Path) {
+        let sensor = media::open_sensor(&self.file).and_then(|sensor| {
+            sensor
+                .map(|(path, file)| {
+                    let controls = sensor::SensorControls::start(file)?;
+                    eprintln!(
+                        "cam2web: {} sensor controls via {}",
+                        video_path.display(),
+                        path.display()
+                    );
+                    Ok(controls)
+                })
+                .transpose()
+        });
+        match sensor {
+            Ok(controls) => self.sensor = controls,
+            Err(error) => eprintln!(
+                "cam2web: {} sensor discovery: {error}",
+                video_path.display()
+            ),
+        }
     }
 
     fn fd(&self) -> RawFd {
         self.file.as_raw_fd()
     }
+}
+
+fn open_node(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
 }
